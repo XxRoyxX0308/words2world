@@ -1,0 +1,22 @@
+{"items": [
+  {"id": "pine_desk", "category": "furniture", "family": "desk", "kind": "prop", "tier": "prop",
+   "size": {"width": 1.3, "height": 0.76}, "condition": "used", "spaces": ["cabin_main"],
+   "surfaces": [0.76],
+   "prompt": "a rustic hand-built desk of thick pine planks, two drawers on the right, square legs, honey-coloured wood with darker worn edges"},
+  {"id": "pine_desk_cluttered_drawer", "variant_of": "pine_desk",
+   "edit": "the same desk with the top drawer pulled half open"},
+  {"id": "oil_lamp_brass", "category": "lighting", "family": "oil_lamp", "kind": "prop", "tier": "small",
+   "size": {"height": 0.32}, "spaces": ["cabin_main"],
+   "prompt": "an old brass kerosene hurricane lamp with a glass chimney, slightly tarnished"},
+  {"id": "fern_lady", "category": "foliage", "family": "fern", "kind": "card", "tier": "small",
+   "size": {"height": 0.6}, "card": {"style": "fan", "planes": 4},
+   "prompt": "a single lady fern clump with arching fronds"},
+  {"id": "family_photo_frame", "category": "decor", "family": "photo", "kind": "slab", "tier": "small",
+   "size": {"height": 0.2}, "aspect": 0.8, "frame": {"depth": 0.02, "border": 0.02, "color": [0.25, 0.16, 0.08]},
+   "prompt": "an old faded colour photograph of a family standing in front of a log cabin"},
+  {"id": "water_streak", "category": "decals", "family": "water", "kind": "decal", "size": [0.6, 1.4],
+   "alpha": "luma", "roughness": 0.3, "place": "under_window",
+   "prompt": "dark vertical water run-off streak stain, narrow at the top widening downward, irregular drips"},
+  {"id": "logs_pine", "category": "surfaces", "family": "wood", "kind": "surface",
+   "source": "polyhaven:bark_brown_02", "res": "2k", "tile_m": 1.0, "layer2": "logs_pine_mossy", "layer2_amount": 0.3}
+]}

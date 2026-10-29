@@ -1,0 +1,6 @@
+{
+  "blender": "D:/Blender Foundation/Blender 5.2/blender.exe",
+  "unreal_editor": "D:/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor.exe",
+  "unreal_project": "D:/MyGame/MyGame.uproject",
+  "comfy_url": "http://127.0.0.1:8188"
+}

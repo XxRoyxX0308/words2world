@@ -1,0 +1,24 @@
+{
+  "title": "one line: what this world is",
+  "style": {
+    "look": "the visual language every prompt shares: era, region, mood, materials, wear",
+    "palette": "dominant colours and accents",
+    "materials": "the material vocabulary (e.g. weathered pine, river stone, wrought iron, wool)",
+    "avoid": "what does not belong (plastic, neon, cartoon proportions, ...)"
+  },
+  "generation": {
+    "megapixels": 1.0,
+    "concept_megapixels": 1.2,
+    "suffix": {
+      "prop": "single object, centered, whole object fully visible with margin, three-quarter view from slightly above, plain pure white background, soft even studio light, no shadow on the ground, photorealistic game asset reference",
+      "card": "single plant cut-out, side view, centered, whole plant visible from base to tip, plain pure white background, even light, no ground, no pot, photorealistic",
+      "slab": "flat front view filling the whole frame, no border, no perspective, no frame, no wall around it",
+      "decal": "top-down photograph of the mark alone on pure white paper, sparse irregular shape, soft fading edges, nothing touches the image border, no objects, no shadow",
+      "edit": "keep the exact same object identity, design, materials, colours, proportions and camera angle; plain pure white background; single object, whole object visible"
+    },
+    "concept_suffix": "game environment concept art, eye-level camera at 1.7 m, realistic scale, physically plausible lighting, rich lived-in detail, no people, no text",
+    "concept_edit_suffix": "same camera, same architecture and layout, keep what is already there and add the requested detail; game environment concept art, no people, no text"
+  },
+  "spaces": [],
+  "bake_presets": {}
+}

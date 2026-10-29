@@ -1,0 +1,38 @@
+# World data: candidates, models, bakes, shots (large, per user)
+worlds/*
+!worlds/.gitkeep
+
+# Machine config (paths); the example is part of the repo
+w2w.config.json
+
+# 3D, model weights, Blender files wherever they end up
+*.glb
+*.gltf
+*.fbx
+*.safetensors
+*.pth
+*.ckpt
+*.blend
+*.blend1
+*.blend2
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Claude Code: keep the project skills, ignore per-user state
+.claude/*
+!.claude/skills/
+
+# Secrets
+.env
+*.token
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
