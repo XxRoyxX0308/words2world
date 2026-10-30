@@ -2,6 +2,9 @@
 
 把一段文字（或幾張參考圖）變成 Unreal Engine 5 裡可以走進去的場景。由 AI agent（Claude Code）用一個 skill `/world` 執行，分四個階段，覺得缺東西就回到第 2 階段：
 
+![cozy_cabin 在 Unreal 裡的截圖](preview_01.png)
+![cozy_cabin 壁爐](preview_02.png)
+
 ```
 1 規劃與初步建築 ──► 2 概念圖與 2D ──► 3 去背與 3D ──► 4 營造場景 ─┐
  (Blender、Unreal)     (ComfyUI)         (RMBG、TRELLIS)  (Blender、Unreal) │
