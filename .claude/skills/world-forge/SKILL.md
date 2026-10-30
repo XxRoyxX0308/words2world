@@ -81,7 +81,7 @@ Read 每個 `2d/review.png`：物件完整、沒有白邊殘影、細件沒被�
 
 ## 6. TRELLIS（背景執行 + 每 30 分鐘回報）
 
-1. 用 Bash 的 `run_in_background` 執行 `python w2w.py trellis <world>`（預設 `1024_cascade`；`trellis.pipeline_type` 可逐件改）。
+1. 用 Bash 的 `run_in_background` 執行 `python w2w.py trellis <world>`（模型只載入一次，分三輪：全部 1024/18 步 → 失敗的 1024/12 步 → 仍失敗的 512；失敗記在 `3d/trellis_fail.json` 的 `level`；CUDA 錯誤（如 device not ready）會弄壞記憶體配置器，所以那時會重開行程並從記錄的 level 繼續；`trellis.pipeline_type`、`trellis.steps` 可逐件固定）。
 2. **立刻建立 30 分鐘的進度回報**：用排程工具（CronCreate，cron `*/30 * * * *`，或 `/loop 30m`），內容是「執行 `python w2w.py progress <world>`，用一行告訴使用者完成數、目前物件、預估剩餘時間」。
 3. 等待時可以做不需要 GPU 的事：`python w2w.py decals <world>`（只處理已選圖的貼花）、整理 `plan/spaces`、寫 surface item 的規格。
 4. 背景工作結束（收到通知，或 progress 顯示 `finished` / `NOT RUNNING`）後：**刪除那個排程**（CronDelete），再回報最後一次結果。

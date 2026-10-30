@@ -2,8 +2,12 @@
 
 usage (WSL, trellis2 env, nothing else on the GPU): python trellis_batch.py <world_dir>
 The queue is logs/trellis_queue.json (written by `w2w.py trellis`); without it, every prop whose rgba.png is newer
-than its model is done. Finished items are skipped, so a restart continues where it stopped. On the first failure
-the process exits with code 3 (CUDA errors poison the context); trellis_loop.sh starts a fresh one.
+than its model is done. Finished items are skipped, so a restart continues where it stopped.
+
+The models load once and the queue runs in passes down LADDER: every item at 1024/18 steps, then the ones that failed
+at 1024/12, then the ones still failing at 512. A failed item is recorded in 3d/trellis_fail.json ("level" = rungs
+failed). A non-CUDA error just moves on; a CUDA error (e.g. "device not ready") breaks the allocator, so the process
+exits with code 3 and trellis_loop.sh starts a fresh one, which resumes from the recorded levels.
 
 item.json "trellis" (all optional; defaults depend on tier):
   pipeline_type  "1024_cascade" (default: 512 sparse structure upsampled to the 1024 models), "1024" (dense 1024,
@@ -12,6 +16,8 @@ item.json "trellis" (all optional; defaults depend on tier):
   texture        baked texture edge length                       hero 2048  | prop 2048  | small 1024
   high_faces     also write model_high.glb with this many faces for normal baking (hero default 300000)
   seed           default 42; change it to get a different reconstruction of the same image
+  steps          sampler steps for all three stages (default: the LADDER rung)
+  pipeline_type and steps set here override every rung for that item.
 """
 import os
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
@@ -33,7 +39,19 @@ from common import World, load, mtime
 DEFAULTS = {"hero": {"faces": 80000, "texture": 2048, "high_faces": 300000},
             "prop": {"faces": 30000, "texture": 2048},
             "small": {"faces": 10000, "texture": 1024}}
-PIPELINE_TYPE = "1024_cascade"
+# 25 steps (upstream default) hit "CUDA driver error: device not ready" on some items; fewer steps get most through
+LADDER = [{"pipeline_type": "1024_cascade", "steps": 18},
+          {"pipeline_type": "1024_cascade", "steps": 12},
+          {"pipeline_type": "512", "steps": 18}]
+
+
+
+def level(it):
+    """Rungs of LADDER this image (and seed) already failed at; a new rgba.png or seed starts over."""
+    fails = load(it.f("3d", "trellis_fail.json"), {})
+    same = fails.get("rgba_mtime") == mtime(it.f("2d", "rgba.png")) and         fails.get("seed") == it.get("trellis", {}).get("seed", 42)
+    return fails.get("level", 0) if same else 0
+
 
 world = World(sys.argv[1])
 queue = load(world.p("logs", "trellis_queue.json"), {}).get("ids")
@@ -49,10 +67,8 @@ for iid in (queue if queue else sorted(items)):
         continue
     if mtime(glb) >= mtime(rgba):
         continue
-    fails = load(it.f("3d", "trellis_fail.json"), {})
-    if fails.get("count", 0) >= 2 and fails.get("rgba_mtime") == mtime(rgba) and \
-            fails.get("seed") == it.get("trellis", {}).get("seed", 42):
-        print(f"[skip] {iid}: failed twice on this image (new pick, matte or trellis.seed resets it)", flush=True)
+    if level(it) >= len(LADDER):
+        print(f"[skip] {iid}: failed at every rung (new pick, matte or trellis.seed resets it)", flush=True)
         continue
     todo.append(it)
 total = len(queue) if queue else len(todo)
@@ -92,22 +108,31 @@ def preview(mesh, path):
     Image.fromarray(np.concatenate(rows, axis=0)).save(path)
 
 
-for n, it in enumerate(todo, 1):
+def cuda_ok():
+    try:
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        return torch.ones(1, device="cuda").add_(1).item() == 2
+    except Exception:
+        return False
+
+
+def run(it, rung, tag):
     t0 = time.time()
-    done_before = total - len(todo) + n - 1
-    print(f"[start] {it.id} ({done_before + 1}/{total}) {time.strftime('%H:%M:%S')}", flush=True)
+    cfg = {**DEFAULTS[it.tier], **LADDER[rung], **it.get("trellis", {})}
+    print(f"[start] {it.id} {tag} {cfg['pipeline_type']}/{cfg['steps']} {time.strftime('%H:%M:%S')}", flush=True)
     mesh = None
-    cfg = {**DEFAULTS[it.tier], **it.get("trellis", {})}
     try:
         os.makedirs(it.f("3d"), exist_ok=True)
         mesh = pipeline.run(
             Image.open(it.f("2d", "rgba.png")),
             seed=cfg.get("seed", 42),
-            pipeline_type=cfg.get("pipeline_type", PIPELINE_TYPE),
+            pipeline_type=cfg["pipeline_type"],
             max_num_tokens=cfg.get("max_num_tokens", 49152),
-            sparse_structure_sampler_params={"steps": 25},
-            shape_slat_sampler_params={"steps": 25},
-            tex_slat_sampler_params={"steps": 25},
+            sparse_structure_sampler_params={"steps": cfg["steps"]},
+            shape_slat_sampler_params={"steps": cfg["steps"]},
+            tex_slat_sampler_params={"steps": cfg["steps"]},
         )[0]
         mesh.simplify(16777216)  # nvdiffrast limit
         gc.collect()
@@ -125,21 +150,34 @@ for n, it in enumerate(todo, 1):
                 print(f"[warn] {it.id}: preview failed ({e})", flush=True)
         secs = time.time() - t0
         with open(it.f("3d", "trellis.json"), "w") as f:
-            json.dump({"seconds": round(secs, 1), "pipeline_type": cfg.get("pipeline_type", PIPELINE_TYPE),
+            json.dump({"seconds": round(secs, 1), "pipeline_type": cfg["pipeline_type"], "steps": cfg["steps"],
                        "faces": cfg["faces"], "texture": cfg["texture"], "seed": cfg.get("seed", 42)}, f)
-        print(f"[done] {it.id} in {secs:.0f}s ({done_before + 1}/{total})", flush=True)
-    except Exception:
-        print(f"[FAIL] {it.id}", flush=True)
+        print(f"[done] {it.id} in {secs:.0f}s {tag}", flush=True)
+        return None
+    except Exception as e:
+        print(f"[FAIL] {it.id} at {cfg['pipeline_type']}/{cfg['steps']}: {e}", flush=True)
         traceback.print_exc()
-        fail_path = it.f("3d", "trellis_fail.json")
-        fails = load(fail_path, {})
-        rg = mtime(it.f("2d", "rgba.png"))
-        same = fails.get("rgba_mtime") == rg and fails.get("seed") == cfg.get("seed", 42)
-        with open(fail_path, "w") as f:
-            json.dump({"count": fails.get("count", 0) + 1 if same else 1, "rgba_mtime": rg, "seed": cfg.get("seed", 42)}, f)
-        sys.stdout.flush()
-        os._exit(3)
+        with open(it.f("3d", "trellis_fail.json"), "w") as f:
+            json.dump({"level": rung + 1, "rgba_mtime": mtime(it.f("2d", "rgba.png")),
+                       "seed": cfg.get("seed", 42), "error": str(e)[:200]}, f)
+        return str(e)
     finally:
         mesh = None
         gc.collect()
+
+
+for rung in range(len(LADDER)):
+    batch = [it for it in todo if level(it) == rung and mtime(it.f("3d", "model.glb")) < mtime(it.f("2d", "rgba.png"))]
+    if not batch:
+        continue
+    print(f"[pass {rung + 1}/{len(LADDER)}] {len(batch)} items at {LADDER[rung]['pipeline_type']}/"
+          f"{LADDER[rung]['steps']} steps", flush=True)
+    for n, it in enumerate(batch, 1):
+        err = run(it, rung, f"(pass {rung + 1}: {n}/{len(batch)})")
+        # "device not ready" leaves the caching allocator broken (later items die on an INTERNAL ASSERT) even
+        # though a small test op still works, so any CUDA error means a fresh process
+        if err is not None and ("CUDA" in err or "ASSERT" in err or not cuda_ok()):
+            print("[restart] CUDA state broken by the failure; a fresh process resumes from here", flush=True)
+            sys.stdout.flush()
+            os._exit(3)
         torch.cuda.empty_cache()

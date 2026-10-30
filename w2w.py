@@ -384,7 +384,7 @@ def cmd_trellis(args):
     world.log({"step": "trellis_start", "count": len(ids)})
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} queue {len(ids)} =====\n")
-    r = wsl(f"bash {wsl_path(GPU)}/trellis_loop.sh {wsl_path(world.root)} 8 >> {wsl_path(log)} 2>&1", check=False)
+    r = wsl(f"bash {wsl_path(GPU)}/trellis_loop.sh {wsl_path(world.root)} 40 >> {wsl_path(log)} 2>&1", check=False)
     world.log({"step": "trellis_end", "exit": r.returncode})
     progress(world)
     sys.exit(r.returncode)
@@ -404,7 +404,7 @@ def progress(world):
             done.append(iid)
             secs.append(load(it.f("3d", "trellis.json"), {}).get("seconds", 0))
         elif it and os.path.exists(it.f("3d", "trellis_fail.json")):
-            failed.append(iid)
+            failed.append(f"{iid} ({load(it.f('3d', 'trellis_fail.json'), {}).get('level', 1)}/3)")
     lines = open(world.p("logs", "trellis.log"), encoding="utf-8", errors="replace").read().splitlines() \
         if os.path.exists(world.p("logs", "trellis.log")) else []
     tail = [l for l in lines if l.startswith("[")]
@@ -422,7 +422,7 @@ def progress(world):
     if alive and current and current not in done:
         print(f"  now: {current}")
     if failed:
-        print(f"  failed at least once: {', '.join(failed)}")
+        print(f"  failed (rungs of 1024/18, 1024/12, 512 failed): {', '.join(failed)}")
     if not alive and left:
         print(f"  not finished: {', '.join(i for i in ids if i not in done)}")
 

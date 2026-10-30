@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run trellis_batch.py until every queued item has a model, restarting a fresh process after a failure
-# (a CUDA error leaves the process unusable). Progress: python w2w.py progress <world>
+# (only when CUDA is unusable after an error; ordinary failures are handled inside trellis_batch.py). Progress: python w2w.py progress <world>
 # usage (inside WSL): bash trellis_loop.sh <world_dir> [max_attempts]
 WORLD="$1"; MAX="${2:-8}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
