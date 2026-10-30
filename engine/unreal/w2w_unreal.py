@@ -68,7 +68,8 @@ def rot_yaw_up(yaw, up):
     xn = math.sqrt(sum(v * v for v in x)) or 1.0
     x = tuple(v / xn for v in x)
     y = (uy * x[2] - uz * x[1], uz * x[0] - ux * x[2], ux * x[1] - uy * x[0])
-    return unreal.MathLibrary.make_rotation_from_axes(vec(x), vec(y), vec((ux, uy, uz)))
+    # Unreal's local +Y is our -Y (the axis mirror): passing vec(y) would hand it a reflected basis (upside down)
+    return unreal.MathLibrary.make_rotation_from_axes(vec(x), vec(tuple(-v for v in y)), vec((ux, uy, uz)))
 
 
 def safe(name):
@@ -758,6 +759,8 @@ class Importer:
             lo, hi = post["exposure"]
             setp("auto_exposure_min_brightness", float(lo))
             setp("auto_exposure_max_brightness", float(hi))
+        if "exposure_bias" in post:              # EV; replaces the project's default bias
+            setp("auto_exposure_bias", float(post["exposure_bias"]))
         for key, prop in (("bloom", "bloom_intensity"), ("vignette", "vignette_intensity"),
                           ("grain", "film_grain_intensity"), ("white_balance", "white_temp"),
                           ("ao", "ambient_occlusion_intensity")):

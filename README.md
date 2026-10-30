@@ -1,24 +1,30 @@
 # words2world
 
-把一段文字（或幾張參考圖）變成 Unreal Engine 5 裡可以走進去的場景。由 AI agent（Claude Code）執行，分成兩個會輪流進行的階段：
+把一段文字（或幾張參考圖）變成 Unreal Engine 5 裡可以走進去的場景。由 AI agent（Claude Code）用一個 skill `/world` 執行，分四個階段，覺得缺東西就回到第 2 階段：
 
 ```
-鍛造 world-forge ──► 營造 world-build ──► 鍛造 ──► 營造 ──► …
- (GPU：ComfyUI + TRELLIS)   (Blender + Unreal + ComfyUI)
+1 規劃與初步建築 ──► 2 概念圖與 2D ──► 3 去背與 3D ──► 4 營造場景 ─┐
+ (Blender、Unreal)     (ComfyUI)         (RMBG、TRELLIS)  (Blender、Unreal) │
+                         ▲                                                  │
+                         └──────────── 截圖審查還缺東西 ◄───────────────────┘
 ```
 
-| 階段 | 做什麼 | 可以用 | 不能開 |
-|---|---|---|---|
-| **鍛造** `/world-forge` | 規劃空間 → 概念圖 → 拆物件（含變體）→ 2D 迭代 → 去背 → TRELLIS 1024 → 3D 模型 | ComfyUI、TRELLIS（輪流） | Blender、遊戲引擎 |
-| **營造** `/world-build` | 烘焙資產 → 建築 → 地形與植被 → 擺放、貼花、燈光 → 截圖審查 → 用截圖要概念圖，列出還缺的物件 | Blender、Unreal、ComfyUI（`--lowvram`） | TRELLIS、去背 |
+| 階段 | 做什麼 | 用到 |
+|---|---|---|
+| 1 規劃與初步建築 | 切小空間 → 參數化建築 → 地形 → 材質 → 第一次匯入與截圖 | Blender、Unreal |
+| 2 概念圖與 2D | 以空殼截圖為參考畫概念圖 → 拆物件（含變體）→ 2D 迭代 | ComfyUI |
+| 3 去背與 3D | 去背 → TRELLIS 1024（失敗退到 1024/12 步、再退到 512） | RMBG、TRELLIS（整張顯卡） |
+| 4 營造場景 | 烘焙資產 → 擺放、貼花、燈光 → 截圖審查 → 缺的東西留佔位物，回到 2 | Blender、Unreal、ComfyUI（`--lowvram`） |
 
-**為什麼分兩段**：TRELLIS.2 用 1024 模型時需要整張 12 GB 顯卡；只要 ComfyUI、Blender 或遊戲引擎還開著就會 OOM。所以所有需要 TRELLIS 的工作集中在鍛造階段，營造階段發現還缺什麼，就留下佔位物並交接回鍛造。每個階段結束時，agent 會在對話裡寫一段交接 prompt，下一個階段（可能是新的 agent）貼上就能接著做。
+**顯卡**：TRELLIS.2 用 1024 模型時需要整張 12 GB 顯卡。各指令會自己切換：TRELLIS / 去背前停掉 ComfyUI、等 w2w 開的無介面 Blender / Unreal 結束；Blender / Unreal 前確認 TRELLIS 已結束；ComfyUI 在 Blender / Unreal 執行時自動用 `--lowvram`。使用者自己開的 Blender / Unreal 視窗不會被關掉，指令會請你先存檔關閉。
+
+**上下文**：每個階段開始前 agent 會跑 `python w2w.py context`（讀 Claude Code 的對話紀錄算出已用的 token）。超過上限（預設 70%）就不開始下一個階段，改在對話裡寫一段交接 prompt：貼到新對話，或在原對話 `/compact` 後說「繼續」。
 
 ## 這個管線特別處理的事
 
 - **物件拆到能單獨拿起來為止**：一張書桌是桌子、螢幕、鍵盤、滑鼠、檯燈、杯子、紙堆…各自生成，再用 `on` / `arrays` / `scatter` 疊放。
 - **每個家族都有變體**：以選定的 2D 圖為參考，用 FLUX.2 klein 的參考圖編輯產生「開門的櫃子」「破損的椅子」，再各自轉 3D。
-- **概念圖先行**：每個小空間（房間、一面牆、角落）先讓 ComfyUI 畫幾張概念圖，agent 依圖決定擺法；營造階段可以把引擎截圖當參考圖，在現有格局上要更多細節。
+- **概念圖先行**：每個小空間（房間、一面牆、角落）先讓 ComfyUI 畫幾張概念圖，agent 依圖決定擺法；概念圖以引擎截圖為參考圖，建立在真正的格局與光線上。
 - **建築不是盒子**：參數化部件（圓木牆、雨淋板、壁柱、腰線、簷口、門窗框與窗台、木瓦屋頂、椽尾、石砌煙囪與基座、碎石、管線、欄杆、樓梯），全部倒角、加權法線、牆基與轉角烘進髒污頂點色。
 - **去塑膠、去重複**：貼花依建築錨點批次放（牆基、轉角、窗下、門框、屋簷下）；表面材質有世界座標的 macro 變化、第二層材質混合、頂點色髒污。
 - **地形與植被由 agent 做**：高度場（fbm、山脊、溪溝、基地整平、小徑）、四層 splat、Poisson 分布的植被分層（樹冠、林下、地被、散物），引擎端用 HISM。
@@ -46,10 +52,10 @@ pip install numpy pillow scipy
 在 Claude Code 裡（repo 根目錄）：
 
 ```
-/world-forge 新世界 cozy_cabin：林中一間溫馨的小木屋，傍晚，屋內有壁爐與書桌……
+/world 新世界 cozy_cabin：林中一間溫馨的小木屋，傍晚，屋內有壁爐與書桌……
 ```
 
-鍛造結束時 agent 會給一段以 `/world-build cozy_cabin` 開頭的交接 prompt；營造結束時如果還有要生成的物件，會給 `/world-forge cozy_cabin …`。貼到新的對話（或同一個）即可。
+上下文用到上限時 agent 會給一段以 `/world cozy_cabin` 開頭、寫明從第幾階段接續的交接 prompt，貼到新的對話即可。
 
 每一步也都是一個指令，可以手動執行（`python w2w.py` 列出全部）：
 
@@ -67,9 +73,9 @@ tools/                     共用（Windows Python）：library、ComfyUI 客戶
 gpu/                       WSL：ComfyUI 啟停、去背、TRELLIS 批次與重試迴圈
 blender/                   無介面 Blender：物件烘焙、建築、地形網格
 engine/unreal/             Unreal 匯入器
-docs/ART_RULES.md          美術與效能的判斷標準（兩個階段共用）
+docs/ART_RULES.md          美術與效能的判斷標準
 docs/FORMATS.md            所有 json 的格式
-.claude/skills/            world-forge、world-build
+.claude/skills/world/      整個流程的 skill
 worlds/<world>/            每個世界的資料（不進版本控制）
 ```
 

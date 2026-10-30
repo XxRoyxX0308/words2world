@@ -2,9 +2,22 @@
 
     python w2w.py <command> <world> [...]          (world = a name under worlds/ or a path)
 
-Forge phase (GPU: ComfyUI and TRELLIS take turns; Blender and Unreal must be closed)
+One skill (/world) runs the phases in order and loops 2 -> 3 -> 4 until the scene is done. The commands switch the
+GPU themselves: they wait for the headless Blender / Unreal runs they started, stop ComfyUI when TRELLIS or RMBG need
+the whole card, and only refuse when the user has a Blender or Unreal window open.
+
+1. Plan and block out (Blender, Unreal)
   new <world> [--brief FILE]              create the world folder (brief.md, plan/, library/, build/)
-  comfy start|stop|status [--lowvram]     ComfyUI in WSL (--lowvram while Unreal / Blender hold VRAM)
+  arch <world>                            headless Blender: build/architecture.json -> build/out/arch/
+  terrain <world>                         build/terrain.json -> heightmap, splat, foliage, terrain meshes
+  surfaces <world> [id ...]               tileable surface materials (CC0 scans or flat) -> game/
+  surfaces-search <word ...>              search Poly Haven + ambientCG
+  scene <world>                           build/scene.json -> build/out/level.json (+ budget.json)
+  engine <world> [--shots] [--round N] [--level-only] [--live]
+                                          import into Unreal and build the level; --shots renders every camera
+
+2. Concepts and 2D (ComfyUI)
+  comfy start|stop|status [--lowvram]     ComfyUI in WSL (start adds --lowvram by itself while Blender / Unreal run)
   concept <world> <space> --prompt P [--ref IMG ...] [--n 2] [--aspect 1.6]
                                           space concept images -> concepts/<space>/concept_<n>.png
   add <world> <items.json>                create / update library items from a list (see docs/FORMATS.md)
@@ -15,24 +28,20 @@ Forge phase (GPU: ComfyUI and TRELLIS take turns; Blender and Unreal must be clo
                                           latest candidate of every unpicked item, 12 per sheet (logs/overview_*.png)
   pick <world> <id> <n> [--why TEXT]      choose candidate n
   reject <world> <id> --why TEXT          drop an item (kept on disk, skipped everywhere)
+
+3. Matte and 3D (RMBG, TRELLIS: the whole GPU)
   matte <world> [id ...]                  stop ComfyUI, remove backgrounds of picks (props, cards, matte decals)
   trellis <world> [id ...]                stop ComfyUI, TRELLIS every matted prop (long: run in the background)
   progress <world>                        TRELLIS progress: done / total, current item, ETA
-  decals <world> [id ...]                 picked decal images -> game/ textures (CPU, any phase)
 
-Build phase (Blender + Unreal + ComfyUI --lowvram; never TRELLIS)
+4. Build the scene (Blender, Unreal, ComfyUI --lowvram): arch / terrain / surfaces / scene / engine above, plus
   bake <world> [id ...] [--retexture]     headless Blender: props / slabs / cards -> game/ (FBX, LODs, textures)
-  surfaces <world> [id ...]               tileable surface materials (CC0 scans or flat) -> game/
-  surfaces-search <word ...>              search Poly Haven + ambientCG
-  arch <world>                            headless Blender: build/architecture.json -> build/out/arch/
-  terrain <world>                         build/terrain.json -> heightmap, splat, foliage, terrain meshes
-  scene <world>                           build/scene.json -> build/out/level.json (+ budget.json)
-  engine <world> [--shots] [--round N] [--level-only] [--live]
-                                          import into Unreal and build the level; --shots renders every camera
+  decals <world> [id ...]                 picked decal images -> game/ textures (CPU, any phase)
 
 Any phase
   status <world> [--all]                  stages per item, queues, what the next phase has to do
-  handoff <world>                         facts for the hand-off prompt to the next phase
+  handoff <world>                         facts for the hand-off prompt (includes the phase to start from)
+  context [--session ID]                  how full this Claude Code conversation is (checked at every phase start)
 """
 import glob
 import json
@@ -80,21 +89,72 @@ def running(exe):
     return exe.lower() in r.stdout.lower()
 
 
+def command_lines(exe):
+    """Command line of every running process called exe."""
+    ps = f"Get-CimInstance Win32_Process -Filter \"Name='{exe}'\" | ForEach-Object {{ '>' + $_.CommandLine }}"
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
+    return [line[1:] for line in r.stdout.splitlines() if line.startswith(">")]
+
+
+def started_by_w2w(cmdline):
+    """Headless Blender (-b) and the unattended importer exit by themselves; anything else is a window the user
+    opened and may hold unsaved work, so w2w never closes it."""
+    return " -b " in f" {cmdline} " or "-unattended" in cmdline
+
+
+def engines_busy():
+    """(processes w2w started, windows the user opened) among Blender and Unreal."""
+    ours, theirs = [], []
+    for exe in ("UnrealEditor.exe", "blender.exe"):
+        for c in command_lines(exe):
+            (ours if started_by_w2w(c) else theirs).append(exe)
+    return ours, theirs
+
+
+def gpu_jobs():
+    """TRELLIS / RMBG jobs running in WSL (they need the whole card)."""
+    r = wsl("pgrep -f '[t]rellis_batch.py|[t]rellis_loop.sh|[m]atte.py' > /dev/null && echo BUSY || echo FREE",
+            check=False, capture=True)
+    return "BUSY" in r.stdout
+
+
 def gpu_exclusive(args):
-    """Forge GPU steps need the whole card: refuse while Blender or Unreal run, stop ComfyUI."""
-    busy = [e for e in ("UnrealEditor.exe", "blender.exe") if running(e)]
-    if busy and not flag(args, "--force"):
-        sys.exit(f"{', '.join(busy)} is running: close it first (TRELLIS 1024 / RMBG need the whole 12 GB), "
-                 f"or pass --force")
+    """Matte / TRELLIS need the whole card: wait for the headless Blender / Unreal runs w2w started, refuse while the
+    user has a Blender or Unreal window open, stop ComfyUI."""
+    if not flag(args, "--force"):
+        waited = 0
+        while True:
+            ours, theirs = engines_busy()
+            if theirs:
+                sys.exit(f"{', '.join(sorted(set(theirs)))} is open in a window: save and close it (TRELLIS 1024 / "
+                         f"RMBG need the whole 12 GB), or pass --force")
+            if not ours:
+                break
+            if waited >= 3600:
+                sys.exit(f"{', '.join(sorted(set(ours)))} started by w2w is still running after an hour")
+            if waited == 0:
+                print(f"waiting for the headless {', '.join(sorted(set(ours)))} run to finish ...", flush=True)
+            time.sleep(15)
+            waited += 15
     out = wsl(f"bash {wsl_path(GPU)}/comfy_stop.sh", check=False, capture=True).stdout.strip()
     if "COMFY_STOPPED" not in out:
         sys.exit(f"could not stop ComfyUI: {out}")
 
 
-def no_trellis():
-    r = wsl("pgrep -f '[t]rellis_batch.py' > /dev/null && echo BUSY || echo FREE", check=False, capture=True)
-    if "BUSY" in r.stdout:
-        sys.exit("TRELLIS is still running in WSL: wait for it (python w2w.py progress <world>) before the build phase")
+def comfy_full():
+    """ComfyUI running without --lowvram (it can hold most of the card)."""
+    r = wsl("pgrep -af '[m]ain.py --listen' || true", check=False, capture=True)
+    return bool(r.stdout.strip()) and "--lowvram" not in r.stdout
+
+
+def engine_gpu():
+    """Before Blender / Unreal: TRELLIS or RMBG must be finished; a full-VRAM ComfyUI is stopped (restart it with
+    --lowvram, which `comfy start` picks by itself while Blender / Unreal run)."""
+    if gpu_jobs():
+        sys.exit("TRELLIS / matte is still running in WSL: wait for it (python w2w.py progress <world>)")
+    if comfy_full():
+        print("stopping ComfyUI (started without --lowvram) so Blender / Unreal get the GPU", flush=True)
+        wsl(f"bash {wsl_path(GPU)}/comfy_stop.sh", check=False, capture=True)
 
 
 def comfy_url():
@@ -132,13 +192,19 @@ def cmd_new(args):
     plan = os.path.join(root, "plan", "world.json")
     if not os.path.exists(plan):
         save(plan, load(os.path.join(REPO, "docs", "templates", "world.json")))
-    print(f"world ready: {root}\n  next: edit brief.md and plan/world.json, then plan the spaces (see world-forge)")
+    print(f"world ready: {root}\n  next: edit brief.md and plan/world.json, then plan the spaces (/world, phase 1)")
 
 
 def cmd_comfy(args):
     sub = args.pop(0)
     if sub == "start":
-        extra = " --lowvram" if flag(args, "--lowvram") else ""
+        if gpu_jobs():
+            sys.exit("TRELLIS / matte is running in WSL and needs the whole GPU: wait for it")
+        low = flag(args, "--lowvram")
+        if not low and any(engines_busy()):
+            print("Blender / Unreal is running: starting ComfyUI with --lowvram", flush=True)
+            low = True
+        extra = " --lowvram" if low else ""
         r = wsl(f"bash {wsl_path(GPU)}/comfy_start.sh{extra}", check=False, capture=True)
         print(r.stdout.strip())
         if "COMFY_READY" not in r.stdout:
@@ -451,7 +517,7 @@ def blender(script, *extra):
 
 def cmd_bake(args):
     world = World(args.pop(0))
-    no_trellis()
+    engine_gpu()
     blender("bake_items.py", world.root, *args)
     print(f"report: {world.p('build', 'out', 'bake_report.md')}")
 
@@ -469,14 +535,14 @@ def cmd_surfaces_search(args):
 
 def cmd_arch(args):
     world = World(args.pop(0))
-    no_trellis()
+    engine_gpu()
     blender("build_arch.py", world.root, *args)
 
 
 def cmd_terrain(args):
     import terrain
     world = World(args.pop(0))
-    no_trellis()
+    engine_gpu()
     terrain.build(world)
     blender("build_terrain.py", world.root)
 
@@ -494,7 +560,7 @@ def cmd_engine(args):
     level_only = flag(args, "--level-only")
     live = flag(args, "--live")
     rnd = take(args, "--round")
-    no_trellis()
+    engine_gpu()
     scene.compile_level(world)
     cfg = config()
     script = os.path.join(REPO, "engine", "unreal", "w2w_unreal.py").replace("\\", "/")
@@ -590,17 +656,56 @@ def cmd_status(args):
 def cmd_handoff(args):
     world = World(args.pop(0))
     items, by_stage, _ = summarize(world)
-    forge_todo = [it.id for st in ("planned", "drafting", "picked", "matted") for it in by_stage.get(st, [])]
-    build_todo = [it.id for it in by_stage.get("ready", [])]
+    todo = {"2_2d": [it.id for st in ("planned", "drafting") for it in by_stage.get(st, [])],
+            "3_3d": [it.id for st in ("picked", "matted") for it in by_stage.get(st, [])],
+            "4_build": [it.id for it in by_stage.get("ready", [])]}
+    placeholders = scene_placeholders(world)
+    if not os.path.exists(world.p("build", "out", "arch", "manifest.json")):
+        phase = "1 plan and block out"
+    elif todo["2_2d"]:
+        phase = "2 concepts and 2D"
+    elif todo["3_3d"]:
+        phase = "3 matte and 3D"
+    else:
+        phase = "4 build the scene"
     print(json.dumps({
-        "world": world.name, "path": world.root, "items": len(items),
+        "world": world.name, "path": world.root, "items": len(items), "next_phase": phase,
         "stages": {s: len(v) for s, v in by_stage.items()},
-        "forge_todo": forge_todo, "build_todo": build_todo,
-        "placeholders": scene_placeholders(world),
+        "todo": todo,
+        "placeholders": placeholders,
         "spaces": list(world.spaces()),
         "scene_exists": os.path.exists(world.p("build", "scene.json")),
         "last_shots": sorted(glob.glob(world.p("shots", "r*")))[-1:] or None,
     }, indent=2, ensure_ascii=False))
+
+
+def cmd_context(args):
+    """Context size of the newest call in this repo's Claude Code transcript: the prompt tokens it sent
+    (input + cache read + cache write) against config context_window."""
+    session = take(args, "--session")
+    slug = "".join(c if c.isalnum() else "-" for c in REPO).lower()
+    base = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    dirs = [os.path.join(base, d) for d in (os.listdir(base) if os.path.isdir(base) else []) if d.lower() == slug]
+    files = [f for d in dirs for f in glob.glob(os.path.join(d, f"{session or '*'}.jsonl"))]
+    if not files:
+        sys.exit(f"no Claude Code transcript for {REPO} under {base}")
+    path = max(files, key=os.path.getmtime)
+    used = 0
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if '"usage"' not in line:
+                continue
+            try:
+                usage = json.loads(line)["message"]["usage"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            used = sum(usage.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens",
+                                                 "cache_creation_input_tokens"))
+    cfg = config()
+    window, limit = cfg["context_window"], cfg["context_limit"]
+    state = "CONTEXT_FULL" if used >= window * limit else "CONTEXT_OK"
+    print(f"{state} {used:,} / {window:,} tokens ({used / window:.0%}, limit {limit:.0%}) "
+          f"session {os.path.basename(path)[:-6]}")
 
 
 COMMANDS = {
@@ -609,6 +714,7 @@ COMMANDS = {
     "trellis": cmd_trellis, "progress": cmd_progress, "decals": cmd_decals, "bake": cmd_bake,
     "surfaces": cmd_surfaces, "surfaces-search": cmd_surfaces_search, "arch": cmd_arch, "terrain": cmd_terrain,
     "scene": cmd_scene, "engine": cmd_engine, "status": cmd_status, "handoff": cmd_handoff,
+    "context": cmd_context,
 }
 
 if __name__ == "__main__":

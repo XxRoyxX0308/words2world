@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "wsl_conda": "~/miniconda3/etc/profile.d/conda.sh",
     "wsl_trellis": "~/TRELLIS.2",
     "wsl_comfy": "~/ComfyUI",
+    "context_window": 1000000,  # tokens of the Claude Code model's context window (w2w.py context)
+    "context_limit": 0.7,       # at a phase start above this share, hand off instead of starting the phase
 }
 
 # texel density targets (px per metre) and LOD ratios per tier, see docs/ART_RULES.md

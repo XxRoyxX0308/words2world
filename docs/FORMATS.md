@@ -15,7 +15,7 @@ worlds/<world>/
       item.json                 規格
       2d/                       cand_<n>.png、prompts.json、sheet.png、rgba.png、review.png
       3d/                       model.glb、model_high.glb、preview.png、trellis.json
-      game/                     引擎用檔案 + asset.json（建造階段產生）
+      game/                     引擎用檔案 + asset.json（第 4 階段烘焙產生）
   build/architecture.json       建築部件
   build/terrain.json            地形與植被
   build/scene.json              擺放、貼花、燈、鏡頭
@@ -54,7 +54,7 @@ worlds/<world>/
 | `status: "rejected"`、`note` | 放棄並寫明原因與替代做法 |
 
 階段（由檔案推導，不需手寫）：`planned → drafting → picked → matted → ready → baked`。
-`ready` = 鍛造階段已完成，等建造階段處理；`baked` = `game/asset.json` 比所有來源新。
+`ready` = 第 3 階段（3D）已完成，等第 4 階段烘焙；`baked` = `game/asset.json` 比所有來源新。
 
 ## plan/spaces/&lt;space&gt;.json
 
