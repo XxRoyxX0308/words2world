@@ -122,9 +122,11 @@ python w2w.py decals <world>
 python w2w.py surfaces <world>      # 有新的 surface 才需要；下載前照第 1 階段告知使用者
 ```
 
-   烘焙前先給每個新 prop 設 `bake.faces`（LOD0 三角面上限）：小物約 2,500、家具與設備約 6,000、細桿和網格多的約 12,000，主角物件和車輛再高一些。沒有設就是 0，會保留 TRELLIS 的原始面數。LOD1、LOD2 會自動依距離產生。設太低會破洞或撕裂貼圖，烘焙後看 preview；有破洞的就調高，並在 `note` 寫明。減面後的模型會重新展 UV，顏色從原模型轉烤過來（`bake_report` 的 `uv: transfer`）。沿用 TRELLIS 的 UV 直接減面時，三角形會跨過 UV 島之間的空隙，貼圖上就出現黑色碎片。所以減面之後的 preview 要看有沒有黑色碎片，也要看顏色有沒有比 2D 圖暗。
+   烘焙前先給每個新 prop 設 `bake.faces`（LOD0 三角面上限）：小物約 2,500、家具與設備約 6,000、細桿和網格多的約 12,000，主角物件和車輛再高一些。沒有設就是 0，會保留 TRELLIS 的原始面數。LOD1、LOD2 會自動依距離產生。設太低會破洞或撕裂貼圖，烘焙後看 preview；有破洞的就調高，並在 `note` 寫明。減面後的模型會重新展 UV，顏色從原模型轉烤過來（`bake_report` 的 `uv: transfer`）。沿用 TRELLIS 的 UV 直接減面時，三角形會跨過 UV 島之間的空隙，貼圖上就出現黑色碎片。所以減面之後的 preview 要看有沒有黑色碎片，也要看顏色有沒有比 2D 圖暗。TRELLIS 常把平板做成中空的盒子，內壁離外皮只有幾 mm，AO 幾乎全黑，在引擎裡會從外皮透出成一片片暗影。烘焙會刪掉這種內壁（`hollow`）；`AO black` 偏高的物件，要看是不是內壁沒刪乾淨。刪內壁會改變網格的拓撲，所以要放在清理的最後；先刪會讓「內部面」那一步把外皮也當成內部刪掉，模型變成碎片。烘焙完要看整批 preview 有沒有碎掉的。百葉、格柵這類很密的細件，減面會撕開，就保留原始面數（`bake.faces: 0`）。
 
+   跑 `engine` 前看 `scene` 的輸出：出現 `not processed yet`，就是那些貼花或物件的 item.json 比成品新，先重跑 `decals` 或 `bake`。貼花數掉到 0，一定是這個原因。
    讀 `build/out/bake_report.md`：`review` / `check` / `fail` 的 Read `game/preview.png` 處理（AO 全黑 → `bake.remesh`；法線錯 → `bake.cage` / `ray`；LOD 變形 → `decimate: planar`；密度低 → `bake.uv: smart`），每件最多重做 2 次。
+   門、櫃門這類有把手的板子，2D 要畫正視圖：從斜側看，TRELLIS 會把把手鏡像到另一側。雙開門做成一扇，場景裡擺兩扇，另一扇用 `scale: [-1, 1, 1]` 鏡像。
    **朝向要逐件確認，不只看 `check`。** 烘焙把每個軸各自縮放到 `size`，TRELLIS 模型如果側躺（正面朝 ±X），尺寸照樣對，只是整件被壓扁，桌子會變成抽屜朝側邊、椅子背對桌子。所有有正反面的物件（桌、椅、櫃、台、車、設備）都要看 preview 下排兩格：左下是從 −X 看，右下是從 −Y 看，正面應該在右下。
    - 正面在左下：設 `yaw_fix: 90`。
    - 正面在 −X 的另一側（上排背面那格才看得到）：設 `yaw_fix: 270`。

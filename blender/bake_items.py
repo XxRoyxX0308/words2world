@@ -45,6 +45,7 @@ LIVE = not bpy.app.background
 
 # Every key can be overridden in plan/world.json "bake_presets": {"<preset>": {...}} and per item in "bake".
 #   hidden     delete enclosed inner shells   interior  delete interior faces
+#   hollow     delete the inner walls of hollow panels (cavity a few mm behind the skin: dark patches)
 #   normals    auto | recalc | keep
 #   remesh     voxel size as a fraction of the object size (0 = off; forces uv "smart")
 #   faces      LOD0 triangle budget (0 = keep TRELLIS's count)
@@ -183,14 +184,16 @@ def normalise_matrix(obj, spec):
 
 # ---------------------------------------------------------------- cleanup
 def inverted_ratio(obj, samples=2000):
-    """Share of faces whose normal points into the mesh (a ray along the normal hits a back face)."""
+    """Share of the surface whose normal points into the mesh (a ray along the normal hits a back face); faces are
+    sampled by area, so slivers round handles and slots do not count like whole panels."""
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     bm.normal_update()
     tree = BVHTree.FromBMesh(bm)
     faces = list(bm.faces)
     rng = np.random.default_rng(0)
-    pick = rng.choice(len(faces), min(samples, len(faces)), replace=False) if faces else []
+    area = np.array([f.calc_area() for f in faces], np.float64)
+    pick = rng.choice(len(faces), samples, p=area / area.sum()) if faces and area.sum() > 0 else []
     bad = 0
     eps = max(obj.dimensions) * 1e-4
     for i in pick:
@@ -200,6 +203,56 @@ def inverted_ratio(obj, samples=2000):
         bad += hit[0] is not None and hit[1].dot(n) > 0
     bm.free()
     return bad / max(len(pick), 1)
+
+
+def hollow_faces(bm, size, near=1.0, rays=16, samples=200000):
+    """Inner walls of hollow parts: TRELLIS often closes a flat panel (door leaf, cabinet side, sofa back) as a
+    box with an empty cavity whose walls lie a few mm behind the outer skin. They bake nearly black AO and show
+    through the skin as dark patches (thick panels leave a wide cavity, so near defaults to the whole size).
+    A face is an inner wall when the first thing along its normal is a face turned back at it, and both of its
+    sides are shut in: at most 2 of 16 hemisphere rays leave the model on the front and on the back. Testing
+    both sides keeps the outer skin of a model whose normals point inward (its true outside is behind it);
+    walls near a slot still glimpse out, while the inside of a cup or an open drawer sees out widely. Faces hit
+    first by rays from outside are always kept."""
+    bm.faces.ensure_lookup_table()
+    tree = BVHTree.FromBMesh(bm)
+    rng = np.random.default_rng(0)
+    dirs = [Vector(v).normalized() for v in rng.normal(size=(rays, 3))]
+
+    def shut(c, n):
+        return sum(tree.ray_cast(c, d if d.dot(n) > 0 else -d, size * 3)[0] is None for d in dirs) <= 2
+
+    # faces seen from outside: rays from random directions aimed at random points of the surface; a grille's fins
+    # face each other and barely see out, yet they are in plain view, so a seen face is never removed
+    faces = list(bm.faces)
+    area = np.array([f.calc_area() for f in faces], np.float64)
+    seen = set()
+    if area.sum() > 0:
+        for i in rng.choice(len(faces), samples, p=area / area.sum()):
+            vs = [v.co for v in faces[i].verts]
+            a, b = rng.random(2)
+            if a + b > 1:
+                a, b = 1 - a, 1 - b
+            t = vs[0] + (vs[1] - vs[0]) * a + (vs[-1] - vs[0]) * b
+            d = Vector(rng.normal(size=3)).normalized()
+            hit = tree.ray_cast(t + d * size * 2, -d, size * 3)[2]
+            if hit is not None:
+                seen.add(hit)
+    # plus one ring round them: sampling misses some faces of a seen part, and a cavity wall only meets a seen
+    # face at the rim of an opening
+    seen |= {g.index for i in list(seen) for e in faces[i].edges for g in e.link_faces}
+    out = []
+    for f in bm.faces:
+        n = f.normal
+        if n.length < 0.5 or f.index in seen:
+            continue
+        c = f.calc_center_median()
+        loc, nrm, idx, dist = tree.ray_cast(c + n * size * 1e-4, n, size * near)
+        if loc is None or nrm.dot(n) > -0.3:
+            continue
+        if shut(c + n * size * 1e-4, n) and shut(c - n * size * 1e-4, -n):
+            out.append(f)
+    return out
 
 
 def hidden_shells(bm, size, samples=60, rays=12):
@@ -285,6 +338,15 @@ def clean(obj, p, stats):
                 bpy.data.meshes.remove(backup)
             bad = after
         stats["inverted_after"] = round(bad, 3)
+    if p.get("hollow", True):    # last: the interior-face pass reads the edge topology this would cut open
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        inner = hollow_faces(bm, size)
+        bmesh.ops.delete(bm, geom=inner, context="FACES")
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+        bm.to_mesh(obj.data)
+        bm.free()
+        stats["hollow_faces_removed"] = len(inner)
     if p["remesh"] > 0:
         mod = obj.modifiers.new("remesh", "REMESH")
         mod.mode = "VOXEL"
@@ -779,7 +841,9 @@ def process(world, it, retexture=False, overrides=None):
                     mat = image_material(img)
                     for s in source.material_slots:
                         s.material = mat
-                    bake(obj, "EMIT", size, path, high=source, cage=p["cage"], ray=p["ray"])
+                    # colour only: a reduced mesh drifts from the original, and a ray that finds nothing bakes
+                    # black, so reach further than the normal bake does
+                    bake(obj, "EMIT", size, path, high=source, cage=max(p["cage"], 0.02), ray=max(p["ray"], 0.06))
             else:
                 bc_img.save(filepath=bc_src)
                 if mr_img:

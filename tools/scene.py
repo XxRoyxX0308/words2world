@@ -1,7 +1,7 @@
 """build/scene.json (+ architecture, terrain, library) -> build/out/level.json + budget.json for the engine importer.
 
 scene.json (all positions in world metres; see docs/FORMATS.md for the full reference):
-  instances   [{"name", "item", "pos": [x, y] | [x, y, z], "yaw", "scale", "space"}]
+  instances   [{"name", "item", "pos": [x, y] | [x, y, z], "yaw", "scale" (s or [sx, sy, sz]; sx < 0 mirrors), "space"}]
               pos with 2 numbers sits on the terrain (or z = 0 without terrain)
               {"item", "on": "<name of another instance>", "at": [x, y] (parent-local), "level": i, "z": dz}
                  stacks on the parent's top (or its item's "surfaces"[i], e.g. a shelf board); yaw is relative
@@ -175,7 +175,8 @@ def compile_level(world):
         surf = (it.get("surfaces") if it else None) or []
         if level is not None and level < len(surf):
             return surf[level]
-        return item_size(inst["item"])[2] * inst.get("scale", 1.0)
+        sc_ = inst.get("scale", 1.0)                        # [x, y, z] mirrors (a negative x) or stretches
+        return item_size(inst["item"])[2] * (abs(sc_[2]) if isinstance(sc_, (list, tuple)) else sc_)
 
     # expand arrays and scatter into plain instances
     raw = list(sc.get("instances", []))

@@ -245,6 +245,8 @@ class World:
             raise ValueError(f"{iid} already exists at {existing.rel}; move the folder by hand or pick another id")
         merged = {**(existing.spec if existing else {}), **spec}
         merged.setdefault("created", time.strftime("%Y-%m-%d %H:%M"))
+        if existing and merged == existing.spec:
+            return path                 # unchanged: rewriting would make the bake / decals look out of date
         save(path, merged)
         self._items = None
         return path
