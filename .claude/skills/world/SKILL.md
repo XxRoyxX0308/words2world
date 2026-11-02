@@ -57,7 +57,7 @@ description: words2world 的完整流程：文字或圖片描述 → Unreal 場�
 3. 建築：依 ART_RULES 第 4 節寫 `build/architecture.json`（基座、牆身層次、頂飾、門窗框與窗台與楣、轉角、挑簷 / 封簷 / 屋脊、煙囪、雨槽、門廊、室內踢腳與樑）→ `python w2w.py arch <world>`，Read 每張 `build/out/arch/preview_<building>.png` 逐項對照，修到沒有一面是平板盒子。預覽是分槽的假色，看形狀不看顏色。
 4. 地形：`build/terrain.json`（起伏、遠景山脊、基地 `flatten`、小徑、溪溝；四層 surface）→ `python w2w.py terrain <world>`。植被可以先用佔位方塊確認分布。
 5. 建築與地形用到的每個 surface 都要是 library 的 `kind: surface` item。`python w2w.py surfaces <world>` 下載前先告訴使用者來源（Poly Haven / ambientCG）、解析度與大約大小（2k 一組約 20–60 MB）。
-6. `build/scene.json` 放鏡頭（每個空間一張全景、一張中景）與燈，`python w2w.py engine <world> --shots`。**第一次對某個 Unreal 專案匯入前**告訴使用者：會寫入 `/Game/W2W/`，會開一個編輯器視窗、跑完自己關，請不要關。不改專案設定或外掛；日誌出現 `WARNING project setting` 轉告使用者。
+6. `build/scene.json` 放鏡頭與燈。鏡頭要能看到每個空間的全部：每個房間至少從兩個相對的角落各拍一張（大房間或 L 形、多段的空間再加，直到每面牆、每個角落都至少在一張裡），加上主角物件的中景；戶外每個方向至少一張。只有一個角度時，鏡頭背後的半個房間等於沒審查過。`python w2w.py engine <world> --shots`。**第一次對某個 Unreal 專案匯入前**告訴使用者：會寫入 `/Game/W2W/`，會開一個編輯器視窗、跑完自己關，請不要關。不改專案設定或外掛；日誌出現 `WARNING project setting` 轉告使用者。
 7. Read 每張截圖：這些空殼截圖就是第 2 階段概念圖的 `--ref`，讓概念建立在真正的格局與光線上。
 
 ## 2. 概念圖與 2D（ComfyUI）
@@ -122,16 +122,33 @@ python w2w.py decals <world>
 python w2w.py surfaces <world>      # 有新的 surface 才需要；下載前照第 1 階段告知使用者
 ```
 
-   讀 `build/out/bake_report.md`：`review` / `check` / `fail` 的 Read `game/preview.png` 處理（AO 全黑 → `bake.remesh`；法線錯 → `bake.cage` / `ray`；LOD 變形 → `decimate: planar`；密度低 → `bake.uv: smart`），每件最多重做 2 次。正面不是朝 −Y 就設 `yaw_fix` 再 `bake <world> <id>`。GLB 本身壞掉不要硬修：寫 `note`，下一輪第 3 階段重做。可用 Blender MCP 即時調參：`runpy.run_path(r"<repo>/blender/bake_items.py")["tune"](r"<world_dir>", "<id>", cage=0.012)`。
+   烘焙前先給每個新 prop 設 `bake.faces`（LOD0 三角面上限）：小物約 2,500、家具與設備約 6,000、細桿和網格多的約 12,000，主角物件和車輛再高一些。沒有設就是 0，會保留 TRELLIS 的原始面數。LOD1、LOD2 會自動依距離產生。設太低會破洞或撕裂貼圖，烘焙後看 preview；有破洞的就調高，並在 `note` 寫明。減面後的模型會重新展 UV，顏色從原模型轉烤過來（`bake_report` 的 `uv: transfer`）。沿用 TRELLIS 的 UV 直接減面時，三角形會跨過 UV 島之間的空隙，貼圖上就出現黑色碎片。所以減面之後的 preview 要看有沒有黑色碎片，也要看顏色有沒有比 2D 圖暗。
+
+   讀 `build/out/bake_report.md`：`review` / `check` / `fail` 的 Read `game/preview.png` 處理（AO 全黑 → `bake.remesh`；法線錯 → `bake.cage` / `ray`；LOD 變形 → `decimate: planar`；密度低 → `bake.uv: smart`），每件最多重做 2 次。
+   **朝向要逐件確認，不只看 `check`。** 烘焙把每個軸各自縮放到 `size`，TRELLIS 模型如果側躺（正面朝 ±X），尺寸照樣對，只是整件被壓扁，桌子會變成抽屜朝側邊、椅子背對桌子。所有有正反面的物件（桌、椅、櫃、台、車、設備）都要看 preview 下排兩格：左下是從 −X 看，右下是從 −Y 看，正面應該在右下。
+   - 正面在左下：設 `yaw_fix: 90`。
+   - 正面在 −X 的另一側（上排背面那格才看得到）：設 `yaw_fix: 270`。
+   - 正面朝 +Y：設 `yaw_fix: 180`。
+
+   改完 `bake <world> <id>`。寬的物件長邊落在深度方向時，`bake_report` 會標 `check`。GLB 本身壞掉不要硬修：寫 `note`，下一輪第 3 階段重做。可用 Blender MCP 即時調參：`runpy.run_path(r"<repo>/blender/bake_items.py")["tune"](r"<world_dir>", "<id>", cage=0.012)`。
 2. 依新物件修建築與地形（第 1 階段的檢查清單），讓出空間、補建築腳邊的過渡。
-3. 擺放（`build/scene.json` → `scene`）：一個空間一個空間做，重讀 `concepts[]` 筆記並 Read 那張概念圖，照它的聚落與層次擺，不要沿牆排一圈。小物用 `on` 疊在父物件上；書、罐、木柴用 `arrays`；地上零碎用 `scatter`。貼花先用 `decal_rules` 鋪滿建築錨點，再手放重點（數量見 ART_RULES 第 5 節）。燈：主光 + 開陰影的重點光（ART_RULES 第 8 節）。鏡頭：每空間全景、中景，主角物件近景，戶外遠景。
+3. 擺放（`build/scene.json` → `scene`）：一個空間一個空間做，**每個空間都要擺，包括沒有概念圖的**。重讀 `concepts[]` 筆記並 Read 那張概念圖，理解它這樣擺的理由，再自己決定整個房間（四面牆、角落、中央、鏡頭背後）怎麼擺；概念圖不合理的地方照用途自己改，不夠就用新的 prompt 或不同方向再生成（ART_RULES 第 3 節）。不要沿牆排一圈；大空間分成多個聚落，物件量跟著面積增加。用平面圖（俯視、畫出每個實例的外框）檢查整個房間有沒有空出一大片，不要只看鏡頭拍到的那一面。座位的朝向從「人坐下來看哪裡」來算：椅子的 yaw 用 `face(桌心 − 椅子位置)`，不是椅子相對桌子的方位角（差了 180°）。桌子的正面是使用者那一側，抽屜朝向使用者。擺完在平面圖（實例外框有朝向線）上確認。同類房間不要整排只用同兩三種物件：每種用途準備多個種類與變體，按房間輪流挑。小物用 `on` 疊在父物件上；書、罐、木柴用 `arrays`；地上零碎用 `scatter`。貼花先用 `decal_rules` 鋪滿建築錨點，再手放重點（數量見 ART_RULES 第 5 節）。燈：主光 + 開陰影的重點光（ART_RULES 第 8 節）。鏡頭：同第 1 階段第 6 步，每個空間多個方向（至少兩個相對角落，大空間更多），加主角物件近景與戶外遠景；新擺了東西的空間就補鏡頭，審查時把同一空間的幾張放在一起看。鏡頭前要先空出來，再擺家具：
+   - 選離門較遠的那一對角落，免得開著的門板貼在鏡頭旁；
+   - 角落沿兩面牆約 2 m 內不放高櫃；
+   - 手擺鏡頭的鏡頭前方約 2 m 留空；
+   - 鏡頭前方 ±35°、2 m 內不能有擋住的東西（廁所隔間的側板、高櫃、開著的門板）；擋住就沿對角線往房間裡移，或換一個角落；
+   - 截圖還是太暗，就加強那台鏡頭的手電筒。
+
+   屋頂與平台也是空間，要和房間一樣擺。設備集中成幾群，管線把各群連起來，再加步道、排水口、安全錨點和水漬。屋面上有天窗、植栽槽、女兒牆和建築本身的設備箱，所以空地要從建好的建築往下打射線求得（像 `roof_height.py` 那樣），不要手寫排除範圍。
+
+   落地玻璃也是「門洞」（窗台高度 0）。寬的開口不要當門，前方的地板不必保留，不然整個房間會擺不下東西。
 4. `python w2w.py engine <world> --shots`（背景執行）。unreal-mcp 連得上而且使用者開著編輯器時，可以用 `--live` 印出的指令在那個編輯器裡跑。
 5. Read `build/out/unreal_import.log` 與 `shots/r<NN>/` 的**每一張**截圖，修 json 後重跑（每輪最多 3 次）：
    - 格局、尺寸、動線與描述一致；建築沒有一面像平板盒子，交界處有東西打斷；
    - 沒有看得出的貼圖重複，沒有 3 × 3 m 以上的空平面；
    - 每個空間的物件量達到 ART_RULES 第 1 節，有聚落與層次；貼花在該在的地方且數量足夠；
    - 沒有懸空或穿插；遠 / 中 / 近都有細節；光線方向與色溫符合描述；
-   - `budget.json` 沒有未處理的 `BUDGET` 警告。
+   - `budget.json` 沒有未處理的 `BUDGET` 警告。三角面超標時降低模型的面數（item 的 `bake.faces` 調低 LOD0，重複很多次的小物先降），再 `bake <world> <id>`；不要用拿掉物件的方式過預算，物件數量是場景看起來有人用過的來源。貼花超標先檢查是否某個空間太大（拆成幾個空間），再減少重複的同一張。
 
 ## 迴圈與結束
 

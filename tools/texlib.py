@@ -71,7 +71,12 @@ def clamp_albedo(rgb, lo=ALBEDO_SRGB_RANGE[0], hi=ALBEDO_SRGB_RANGE[1], max_sat=
     """Remap brightness into [lo, hi] (contrast kept) and pull saturation above max_sat back toward grey."""
     rgb = np.clip(rgb[..., :3], 0, 1)
     lum = luminance(rgb)[..., None]
-    out = rgb * ((lo + lum * (hi - lo)) / np.maximum(lum, 1e-4))
+    target = lo + lum * (hi - lo)
+    out = rgb * (target / np.maximum(lum, 1e-4))
+    # near black the gain reaches ~60x and turns faint colour noise into saturated speckles (red streaks on black
+    # screens): fade those pixels to neutral grey at the target brightness
+    w = np.clip(lum / 0.04, 0.0, 1.0)
+    out = out * w + target * (1.0 - w)
     mx, mn = out.max(axis=-1, keepdims=True), out.min(axis=-1, keepdims=True)
     sat = (mx - mn) / np.maximum(mx, 1e-4)
     k = np.where(sat > max_sat, max_sat / np.maximum(sat, 1e-4), 1.0)

@@ -2,6 +2,10 @@
 worlds/*
 !worlds/.gitkeep
 
+# Source scene descriptions and reference images (per user, not shared)
+scene_data/*
+!scene_data/.gitkeep
+
 # Machine config (paths); the example is part of the repo
 w2w.config.json
 

@@ -1,7 +1,9 @@
 """build/out/terrain/height.npy -> terrain tiles (FBX, Nanite in the engine) + manifest.json.
 
 usage: python w2w.py terrain <world>   (runs tools/terrain.py first, then this in headless Blender)
-UV0 spans the whole terrain (0..1, v = 1 at the north edge, matching splat.png); the engine material tiles the
+terrain.json "holes": [[x0, y0, x1, y1], ...] leaves those cells out (stair wells and shafts that go below the
+ground inside a building). UV0 spans the whole terrain (0..1, v = 1 at the north edge, matching splat.png); the
+engine material tiles the
 layer textures in world space and blends them with the splat map. Vertex colour R = 0 (no grime on terrain).
 """
 import os
@@ -24,6 +26,11 @@ def build(world_dir):
     res = meta["res"]
     x0, y0 = meta["origin"]
     tile = max(4, int(round(meta.get("tile_m", 64) / res)))
+    holes = meta.get("holes", [])
+
+    def in_hole(i, j):                    # cell (i, j) is left out when its centre lies in a hole rect
+        cx, cy = x0 + (i + 0.5) * res, y0 + (j + 0.5) * res
+        return any(a <= cx <= c and b <= cy <= d for a, b, c, d in holes)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     tiles = []
     for j0 in range(0, ny - 1, tile):
@@ -38,6 +45,8 @@ def build(world_dir):
                     verts[(i, j)] = bm.verts.new((x0 + i * res, y0 + j * res, float(h[j, i])))
             for j in range(j0, j1):
                 for i in range(i0, i1):
+                    if holes and in_hole(i, j):
+                        continue
                     f = bm.faces.new([verts[(i, j)], verts[(i + 1, j)], verts[(i + 1, j + 1)], verts[(i, j + 1)]])
                     for loop in f.loops:
                         ii = round((loop.vert.co.x - x0) / res)

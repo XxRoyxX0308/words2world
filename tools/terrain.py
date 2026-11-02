@@ -8,7 +8,11 @@ terrain.json:
   "ridges":  [{"path": [[x, y], ...], "height": 12, "width": 35}],
   "carve":   [{"path": [[x, y], ...], "depth": 1.2, "width": 3.0}],              (streams, ditches)
   "flatten": [{"center": [x, y], "radius": 9, "falloff": 8, "height": 0.0}],     (building pads, clearings)
+             {"rect": [x0, y0, x1, y1], "falloff": 10, "height": 0.0}              (rectangular sites)
+             {"path": [[x, y, z], ...], "width": 9, "falloff": 10, "offset": -0.3}  (road beds: the height follows
+                                                                                  the path's z, plus offset)
   "paths":   [{"points": [[x, y], ...], "width": 1.6, "sink": 0.06}],
+  "holes":   [[x0, y0, x1, y1], ...]               (no terrain there: stair wells going below ground indoors)
   "layers":  {"r": "grass_wild", "g": "dirt_path", "b": "rock_mossy", "a": "forest_floor"},   (surface ids)
   "rock_slope": 32,                                   (degrees where rock takes over)
   "foliage": [
@@ -81,6 +85,29 @@ def polyline_distance(grid_x, grid_y, pts):
     return best
 
 
+def flatten_shape(f, x, y):
+    """Distance from (x, y) to the outside of a flatten shape (0 inside) and the target height there
+    (None = the terrain height at the shape's centre)."""
+    x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+    if "rect" in f:
+        x0, y0, x1, y1 = f["rect"]
+        dx = np.maximum(np.maximum(x0 - x, x - x1), 0)
+        dy = np.maximum(np.maximum(y0 - y, y - y1), 0)
+        return np.hypot(dx, dy), f.get("height")
+    if "path" in f:
+        pts = np.asarray(f["path"], np.float64)
+        best, z = np.full(x.shape, np.inf), np.zeros(x.shape)
+        for a, b in zip(pts[:-1], pts[1:]):
+            ab = b[:2] - a[:2]
+            t = np.clip(((x - a[0]) * ab[0] + (y - a[1]) * ab[1]) / max(ab @ ab, 1e-9), 0, 1)
+            d = np.hypot(x - (a[0] + t * ab[0]), y - (a[1] + t * ab[1]))
+            closer = d < best
+            best = np.where(closer, d, best)
+            z = np.where(closer, a[2] + t * (b[2] - a[2]), z)
+        return np.maximum(best - f.get("width", 6) / 2, 0), z + f.get("offset", 0.0)
+    return np.maximum(np.hypot(x - f["center"][0], y - f["center"][1]) - f["radius"], 0), f.get("height")
+
+
 def smoothstep(e0, e1, x):
     t = np.clip((x - e0) / max(e1 - e0, 1e-9), 0, 1)
     return t * t * (3 - 2 * t)
@@ -106,9 +133,10 @@ def heightfield(cfg, grid):
         path_mask = np.maximum(path_mask, 1 - smoothstep(w * 0.35, w * 0.9, d))
     flat_mask = np.zeros_like(h)
     for f in cfg.get("flatten", []):
-        d = np.hypot(grid.X - f["center"][0], grid.Y - f["center"][1])
-        target = f.get("height", float(grid.sample(h, f["center"][0], f["center"][1])))
-        m = 1 - smoothstep(f["radius"], f["radius"] + f.get("falloff", 6), d)
+        d, target = flatten_shape(f, grid.X, grid.Y)
+        if target is None:
+            target = float(grid.sample(h, f["center"][0], f["center"][1]))
+        m = 1 - smoothstep(0, f.get("falloff", 6), d)
         h = h * (1 - m) + target * m
         flat_mask = np.maximum(flat_mask, m)
     return h, path_mask, flat_mask
@@ -204,7 +232,7 @@ def scatter(cfg, grid, h, slope, gx, gy, path_dist, flat_cfg, weights, forest):
                 m &= grid.sample(path_dist, x, y) > avoid["paths"]
             if avoid.get("flatten") is not None:
                 for f in flat_cfg:
-                    m &= np.hypot(x - f["center"][0], y - f["center"][1]) > f["radius"] + avoid["flatten"]
+                    m &= flatten_shape(f, x, y)[0] > avoid["flatten"]
             mg = avoid.get("margin", 0.0)
             for x0, y0, x1, y1 in avoid.get("rects", []):
                 m &= ~((x >= x0 - mg) & (x <= x1 + mg) & (y >= y0 - mg) & (y <= y1 + mg))
@@ -265,7 +293,7 @@ def build(world):
     save(os.path.join(out, "foliage.json"), {"layers": layers})
     meta = {"size": [grid.w, grid.d], "center": [grid.cx, grid.cy], "res": grid.res, "origin": [grid.x0, grid.y0],
             "shape": [grid.ny, grid.nx], "z_min": lo, "z_max": hi, "layers": cfg.get("layers", {}),
-            "tile_m": cfg.get("tile_m", 64)}
+            "tile_m": cfg.get("tile_m", 64), "holes": cfg.get("holes", [])}
     save(os.path.join(out, "terrain_meta.json"), meta)
     print(f"terrain {grid.w}x{grid.d} m at {grid.res} m, z {lo:.1f} .. {hi:.1f} m -> {out}")
     world.log({"step": "terrain", "foliage": sum(l["count"] for l in layers)})

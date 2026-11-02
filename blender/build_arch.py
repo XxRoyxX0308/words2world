@@ -8,7 +8,8 @@ irregular stone where the real thing would have them. Every part is in building-
 above, so the right-hand side of the direction of travel is the outside.
 
 Part types (all take "surface" = a library surface id used as the material slot, optional "group" = which FBX
-it goes into (default "main"), optional "seed"):
+it goes into (default "main"), optional "seed"; walls take "corners": false to keep their ends out of the corner
+grime, which interior partitions should):
   wall      solid wall along "path" (closed: true for a loop): height, thickness, z, openings, plinth, cornice,
             belts, pilasters, siding, corner_boards
   logwall   stacked round logs along "path": height, log_d, overhang (log ends past the corners), course_offset
@@ -28,10 +29,19 @@ it goes into (default "main"), optional "seed"):
   pipe      "path" [[x, y, z], ...], radius, brackets (every n m, toward "wall_side" [nx, ny]): conduits,
             gutters, downspouts, stove pipes
   box       "center", "size" [x, y, z], "yaw": window boxes, shelves, built-ins, anything rectangular
+  solid     planar convex polygon "points" [[x, y, z], ...] pushed along "extrude" [dx, dy, dz]: slanted or
+            faceted masses (folded canopies, wedge legs, chamfered fascias) that boxes cannot express
+  hull      convex hull of "points" [[x, y, z], ...]: sloped plates, tapered blocks, leaning legs
+  loft      one closed solid through "sections" [[[x, y, z], ...], ...] (same point count and winding in every
+            section; quads between neighbours, capped ends): swept bands and curved fascias. Prefer it to a
+            chain of hulls, whose touching end faces show up as holes and dark patches in the engine
 
 Openings (wall / logwall): {"at": distance along the segment, "seg": segment index (default 0), "width",
 "height", "sill" (0 for doors), "kind": "door" | "window" | "hole", "frame": {"width", "depth", "surface"},
 "lintel": {"height", "extend", "surface"}, "sill_board": true, "glass": true, "mullions": [cols, rows]}
+
+Building option "split_glass": true moves the glass of every group into its own mesh (<group>_glass), so the
+engine can keep Nanite on the opaque part.
 
 All sharp edges get a small bevel (defaults.bevel, default 12 mm) and weighted normals; vertex colour R carries
 "grime" (wall bases, corners) for the engine material; UVs are in metres (material tiling = 1 / tile_m).
@@ -224,15 +234,17 @@ def opening_trim(g, part, a, d, out, op, z, t, surf_default):
     fw, fd = fr.get("width", 0.09), fr.get("depth", 0.04)
     fs = fr.get("surface", surf_default)
     depth = t + 2 * fd
+    e = 0.004          # every frame face sits a few mm off the wall's cut faces and off its neighbours: two
+    #                    coplanar faces z-fight (flicker) in the engine
     if fw > 0 and op.get("kind", "window") != "hole":
         zb, zt = z + sill, z + sill + h
         door = op.get("kind") == "door"
         jb, jt = (zb, zt + fw) if door else (zb - fw, zt + fw)
-        for side in (-1, 1):   # jambs
-            g.box(c + d * side * (w / 2 + fw / 2) + UP * ((jb + jt) / 2), (fw, depth, jt - jb), fs, d)
-        g.box(c + UP * (zt + fw / 2), (w + 2 * fw, depth, fw), fs, d)              # head
+        for side in (-1, 1):   # jambs, overlapping the opening's edge by e
+            g.box(c + d * side * (w / 2 + fw / 2 - e) + UP * ((jb + jt) / 2), (fw, depth, jt - jb), fs, d)
+        g.box(c + UP * (zt + fw / 2 - e), (w + 2 * fw - 4 * e, depth - 2 * e, fw), fs, d)          # head
         if op.get("kind") != "door":
-            g.box(c + UP * (zb - fw / 2), (w + 2 * fw, depth, fw), fs, d)          # bottom of the frame
+            g.box(c + UP * (zb - fw / 2 + e), (w + 2 * fw - 4 * e, depth - 2 * e, fw), fs, d)      # bottom
     if op.get("sill_board", op.get("kind") == "window"):
         g.box(c + out * (t / 2 + fd + 0.03) + UP * (z + sill - fw - 0.02),
               (w + 2 * fw + 0.12, 0.09, 0.04), fs, d)
@@ -649,9 +661,32 @@ def part_pipe(g, part, rng):
                 g.box(p + ws * r * 1.5, (r * 2.6, r * 3, r * 1.2), surf, (ws.y, -ws.x, 0))
 
 
+def part_solid(g, part, rng):
+    front = [Vector(p) for p in part["points"]]
+    v = Vector(part["extrude"])
+    g.solid(front, [p + v for p in front], part["surface"])
+
+
+def part_hull(g, part, rng):
+    g.hull([Vector(p) for p in part["points"]], part["surface"])
+
+
+def part_loft(g, part, rng):
+    secs = [[g.bm.verts.new(p) for p in s] for s in part["sections"]]
+    n = len(secs[0])
+    for a, b in zip(secs[:-1], secs[1:]):
+        for i in range(n):
+            j = (i + 1) % n
+            g.face([a[i], a[j], b[j], b[i]], part["surface"])
+    if part.get("cap", True):
+        g.face(list(reversed(secs[0])), part["surface"])
+        g.face(secs[-1], part["surface"])
+
+
 PARTS = {"wall": part_wall, "logwall": part_logwall, "slab": part_slab, "box": part_box, "beam": part_beam,
          "roof": part_roof, "stairs": part_stairs, "railing": part_railing, "chimney": part_chimney,
-         "foundation": part_foundation, "chunks": part_chunks, "pipe": part_pipe}
+         "foundation": part_foundation, "chunks": part_chunks, "pipe": part_pipe, "solid": part_solid,
+         "hull": part_hull, "loft": part_loft}
 
 
 def merge(dst, src):
@@ -664,6 +699,34 @@ def merge(dst, src):
         for l_src, l_dst in zip(f.loops, nf.loops):
             l_dst[dst.uv].uv = l_src[src.uv].uv
     src.bm.free()
+
+
+def split_off(g, surf, name):
+    """Move every face of one surface into a new Geo: the engine importer turns Nanite off for meshes with glass,
+    so glass in its own mesh keeps the concrete Nanite."""
+    if surf not in g.slots:
+        return None
+    idx = g.slots.index(surf)
+    out = Geo(name)
+    mapping = {}
+    faces = [f for f in g.bm.faces if f.material_index == idx]
+    for f in faces:
+        vs = []
+        for v in f.verts:
+            if v not in mapping:
+                mapping[v] = out.bm.verts.new(v.co)
+            vs.append(mapping[v])
+        nf = out.bm.faces.new(vs)
+        nf.material_index = out.slot(surf)
+        for l_src, l_dst in zip(f.loops, nf.loops):
+            l_dst[out.uv].uv = l_src[g.uv].uv
+    bmesh.ops.delete(g.bm, geom=faces, context="FACES")
+    bmesh.ops.delete(g.bm, geom=[v for v in g.bm.verts if not v.link_faces], context="VERTS")
+    for f in g.bm.faces:
+        if f.material_index > idx:
+            f.material_index -= 1
+    g.slots.pop(idx)
+    return out
 
 
 # ---------------------------------------------------------------- finishing
@@ -707,8 +770,9 @@ def finish(g, bevel, corners, ground_z, rng):
     zrel = co[:, 2] - ground_z
     grime = np.clip(1 - zrel / 0.9, 0, 1) ** 1.6
     if corners:
-        cs = np.array(corners, np.float32)
-        dist = np.min(np.linalg.norm(co[:, None, :2] - cs[None, :, :], axis=2), axis=1)
+        cs = np.array(sorted(set(corners)), np.float32)
+        dist = np.concatenate([np.min(np.linalg.norm(co[i:i + 20000, None, :2] - cs[None, :, :], axis=2), axis=1)
+                               for i in range(0, len(co), 20000)]) if len(co) else np.zeros(0, np.float32)
         grime = np.maximum(grime, np.clip(1 - dist / 0.45, 0, 1) ** 2 * 0.6)
     noise = np.sin(co[:, 0] * 3.1 + co[:, 1] * 1.7) * np.sin(co[:, 2] * 2.3 + co[:, 0] * 0.9)
     grime = np.clip(grime * (0.75 + 0.25 * noise) + rng.uniform(0, 0.05, len(grime)), 0, 1)
@@ -803,8 +867,13 @@ def build(world_dir, only=()):
             g = groups.setdefault(part.get("group", "main"), Geo(f"SM_{b['id']}_{part.get('group', 'main')}"))
             rng = np.random.default_rng(part.get("seed", i * 7919 + len(b["id"])))
             fn(g, part, rng)
-            if part["type"] in ("wall", "logwall"):
+            if part["type"] in ("wall", "logwall") and part.get("corners", True):
                 corners += [tuple(p[:2]) for p in part["path"]]
+        if b.get("split_glass"):
+            for gname in list(groups):
+                gl = split_off(groups[gname], "glass", f"SM_{b['id']}_{gname}_glass")
+                if gl is not None:
+                    groups[f"{gname}_glass"] = gl
         objs = []
         for gname, g in groups.items():
             obj = finish(g, b.get("bevel", defaults.get("bevel", 0.012)), corners, b.get("ground_z", 0.0),

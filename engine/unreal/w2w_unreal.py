@@ -740,6 +740,8 @@ class Importer:
             comp.set_fog_density(fog.get("density", 0.02))
             comp.set_fog_height_falloff(fog.get("height_falloff", 0.2))
             comp.set_volumetric_fog(fog.get("volumetric", True))
+            if fog.get("start"):                 # metres; keeps unshadowed fog out of interiors and close-ups
+                comp.set_editor_property("start_distance", float(fog["start"]) * 100.0)
             if fog.get("color"):
                 comp.set_fog_inscattering_color(unreal.LinearColor(*fog["color"], 1.0))
             tag(actor, "HeightFog", "Environment")
@@ -761,6 +763,9 @@ class Importer:
             setp("auto_exposure_max_brightness", float(hi))
         if "exposure_bias" in post:              # EV; replaces the project's default bias
             setp("auto_exposure_bias", float(post["exposure_bias"]))
+        if "exposure_speed" in post:             # EV per second both ways: review shots jump between dark and bright
+            setp("auto_exposure_speed_up", float(post["exposure_speed"]))
+            setp("auto_exposure_speed_down", float(post["exposure_speed"]))
         for key, prop in (("bloom", "bloom_intensity"), ("vignette", "vignette_intensity"),
                           ("grain", "film_grain_intensity"), ("white_balance", "white_temp"),
                           ("ao", "ambient_occlusion_intensity")):

@@ -11,12 +11,16 @@ scene.json (all positions in world metres; see docs/FORMATS.md for the full refe
                "space", "seed"}]                                            (clutter on a floor or a table top)
   decals      [{"decal", "pos": [x, y, z], "normal": [nx, ny, nz], "roll", "scale"}]
   decal_rules [{"decals": [...], "anchors": ["wall_base", ...], "sides": "out" | "in" | "both", "every": 1.5,
-               "chance": 0.7, "scale": [0.8, 1.3], "roll": 8, "buildings": [...], "seed": 1}]
+               "chance": 0.7, "scale": [0.8, 1.3], "roll": 8, "buildings": [...], "groups": [...], "seed": 1}]
+              groups: only the parts of these architecture groups (e.g. the facades, not interior partitions)
               anchors: wall_base, wall_top, wall_corner, under_window, door_frame, door_floor, floor_edge,
                        chimney_base, foundation
   lights      [{"type": "point" | "spot" | "rect", "pos": [x, y, z], "lumens", "kelvin", "radius", "shadows",
                "dir", "cone", "size", "color", "fixture": item id, "space"}]
   lighting    {"sun": {"dir", "lux", "kelvin"}, "sky": true, "fog": {...}, "post": {...}, "gi": "dynamic"}
+              fog: density, height_falloff, volumetric, color, start (metres before the fog begins)
+              post: exposure [min, max] EV, exposure_bias, exposure_speed (EV/s; raise it when the review
+                    shots jump from daylight to dark rooms), bloom, vignette, grain, ao, saturation, contrast
   cameras     [{"id", "pos", "look", "fov", "space"}]
   player_start {"pos", "yaw"}
 
@@ -49,7 +53,7 @@ def to_world(b, p):
     return [ox + x, oy + y, oz + (p[2] if len(p) > 2 else 0.0)]
 
 
-def anchors(arch, kinds, spacing, sides, only_buildings=None):
+def anchors(arch, kinds, spacing, sides, only_buildings=None, groups=None):
     """World-space decal anchors on the buildings: (kind, pos, normal, up, depth)."""
     out = []
     for b in arch.get("buildings", []):
@@ -57,6 +61,8 @@ def anchors(arch, kinds, spacing, sides, only_buildings=None):
             continue
         rot_n = lambda n: list(rot2(n, b.get("yaw", 0))) + [0.0]
         for part in b["parts"]:
+            if groups and part.get("group") not in groups:
+                continue
             t = part.get("thickness", part.get("log_d", 0.26))
             if part["type"] in ("wall", "logwall"):
                 pts = part["path"] + ([part["path"][0]] if part.get("closed") else [])
@@ -297,7 +303,7 @@ def compile_level(world):
     for k, rule in enumerate(sc.get("decal_rules", [])):
         rng = np.random.default_rng(rule.get("seed", 500 + k))
         found = anchors(arch, set(rule["anchors"]), rule.get("every", 1.5), rule.get("sides", "out"),
-                        rule.get("buildings"))
+                        rule.get("buildings"), rule.get("groups"))
         lo, hi = rule.get("scale", [0.8, 1.3])
         n_before = len(decals)
         for j, (kind, pos, normal, up, depth) in enumerate(found):
@@ -384,8 +390,8 @@ def compile_level(world):
         else:
             s["tris"] += library[r["item"]]["asset"]["lods"][0]["tris"]
     for d in decals:
-        nearest = min(instances, key=lambda r: (r["pos"][0] - d["pos"][0]) ** 2 + (r["pos"][1] - d["pos"][1]) ** 2) \
-            if instances else None
+        nearest = min(instances, key=lambda r: sum((r["pos"][i] - d["pos"][i]) ** 2 for i in range(3))) \
+            if instances else None                              # 3D: a decal belongs to its own floor
         spaces.setdefault(nearest["space"] if nearest else "outdoor",
                           {"instances": 0, "tris": 0, "placeholders": 0, "decals": 0, "shadow_lights": 0})["decals"] += 1
     for l in lights:

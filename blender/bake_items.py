@@ -742,11 +742,25 @@ def process(world, it, retexture=False, overrides=None):
         shader = "foliage"
     else:
         obj = import_joined(it.f("3d", "model.glb"), base)
+        # a model lying sideways is squashed to the planned size without any visible error: flag it
+        rot = Matrix.Rotation(math.radians(spec.get("yaw_fix", 0)), 4, "Z")
+        lo, hi = (Vector([f(p[i] for p in [rot @ v.co for v in obj.data.vertices]) for i in range(3)])
+                  for f in (min, max))
+        rx, ry = hi.x - lo.x, hi.y - lo.y
+        wide = "width_m" in spec and (spec["width_m"] > spec["depth_m"] * 1.3 if "depth_m" in spec
+                                      else spec["width_m"] >= 1.0)
+        if wide and ry > rx * 1.3:
+            stats["flags"].append(f"model is longer in depth ({ry:.2f}) than width ({rx:.2f}) but the plan is wide: "
+                                  "front probably faces +-X, set yaw_fix 90 / 270 (preview side view)")
         m = normalise_matrix(obj, spec)
         obj.data.transform(m)
         stats["faces_source"] = len(obj.data.polygons)
         bc_img, mr_img = gltf_images(obj)
-        new_uv = p["uv"] == "smart" or p["remesh"] > 0
+        # decimating across UV seams leaves long triangles spanning several islands (dark shards on the texture):
+        # a reduced mesh gets its own UVs and the colour is baked over from the original
+        reduced = p["faces"] and tri_count(obj) > p["faces"]
+        new_uv = p["uv"] == "smart" or p["remesh"] > 0 or bool(reduced)
+        stats["uv"] = "transfer" if new_uv else "kept"
         source = duplicate(obj, "source") if new_uv else None      # keeps the original UVs for the transfer
         clean(obj, p, stats)
         if new_uv:
@@ -761,6 +775,7 @@ def process(world, it, retexture=False, overrides=None):
                 for img, path in ((bc_img, bc_src), (mr_img, mr_src)):
                     if img is None:
                         continue
+                    img.colorspace_settings.name = "Non-Color"   # bytes in = bytes out (no sRGB decode)
                     mat = image_material(img)
                     for s in source.material_slots:
                         s.material = mat
