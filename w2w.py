@@ -13,8 +13,10 @@ the whole card, and only refuse when the user has a Blender or Unreal window ope
   surfaces <world> [id ...]               tileable surface materials (CC0 scans or flat) -> game/
   surfaces-search <word ...>              search Poly Haven + ambientCG
   scene <world>                           build/scene.json -> build/out/level.json (+ budget.json)
-  engine <world> [--shots] [--round N] [--level-only] [--live]
-                                          import into Unreal and build the level; --shots renders every camera
+  engine <world> [--shots] [--round N] [--level-only] [--live] [--focus SPACE,SPACE] [--rebuild-materials]
+                                          import into Unreal and build the level; --shots renders every camera;
+                                          --focus builds only those spaces (instances, lights, decals, cameras)
+                                          into the map <world>_focus: one room at a time, ~10 min a round
 
 2. Concepts and 2D (ComfyUI)
   comfy start|stop|status [--lowvram]     ComfyUI in WSL (start adds --lowvram by itself while Blender / Unreal run)
@@ -36,6 +38,8 @@ the whole card, and only refuse when the user has a Blender or Unreal window ope
 
 4. Build the scene (Blender, Unreal, ComfyUI --lowvram): arch / terrain / surfaces / scene / engine above, plus
   bake <world> [id ...] [--retexture]     headless Blender: props / slabs / cards -> game/ (FBX, LODs, textures)
+  supports <world> [id ...]               headless Blender: real table tops / shelf boards of baked props
+                                          (game/support.json; 'on' children stand on them). Run after bake
   decals <world> [id ...]                 picked decal images -> game/ textures (CPU, any phase)
 
 Any phase
@@ -522,6 +526,11 @@ def cmd_bake(args):
     print(f"report: {world.p('build', 'out', 'bake_report.md')}")
 
 
+def cmd_supports(args):
+    world = World(args.pop(0))
+    blender("support_map.py", world.root, *args)
+
+
 def cmd_surfaces(args):
     import surfaces
     world = World(args.pop(0))
@@ -560,8 +569,10 @@ def cmd_engine(args):
     level_only = flag(args, "--level-only")
     live = flag(args, "--live")
     rnd = take(args, "--round")
+    focus = take(args, "--focus")
+    rebuild = flag(args, "--rebuild-materials")
     engine_gpu()
-    scene.compile_level(world)
+    scene.compile_level(world, focus.split(",") if focus else None)
     cfg = config()
     script = os.path.join(REPO, "engine", "unreal", "w2w_unreal.py").replace("\\", "/")
     if rnd is None:
@@ -569,6 +580,7 @@ def cmd_engine(args):
     py_args = f"--world {world.root.replace(chr(92), '/')} --round r{int(rnd):02d}"
     py_args += " --shots" if shots else ""
     py_args += " --level-only" if level_only else ""
+    py_args += " --rebuild-materials" if rebuild else ""
     if live:
         print("run this in the open editor (Output Log > Python, or the unreal-mcp python tool):")
         print(f'  py "{script}" {py_args}')
@@ -711,7 +723,7 @@ def cmd_context(args):
 COMMANDS = {
     "new": cmd_new, "comfy": cmd_comfy, "concept": cmd_concept, "add": cmd_add, "gen": cmd_gen,
     "batch": cmd_batch, "sheet": cmd_sheet, "pick": cmd_pick, "reject": cmd_reject, "matte": cmd_matte,
-    "trellis": cmd_trellis, "progress": cmd_progress, "decals": cmd_decals, "bake": cmd_bake,
+    "trellis": cmd_trellis, "progress": cmd_progress, "decals": cmd_decals, "bake": cmd_bake, "supports": cmd_supports,
     "surfaces": cmd_surfaces, "surfaces-search": cmd_surfaces_search, "arch": cmd_arch, "terrain": cmd_terrain,
     "scene": cmd_scene, "engine": cmd_engine, "status": cmd_status, "handoff": cmd_handoff,
     "context": cmd_context,

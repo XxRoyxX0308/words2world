@@ -308,7 +308,15 @@ class Importer:
             g.out(orm, "R", P.MP_AMBIENT_OCCLUSION)
             g.out(g.mul(orm, g.scalar("RoughnessScale", 1.0), "G", ""), "", P.MP_ROUGHNESS)
             g.out(orm, "B", P.MP_METALLIC)
-            g.out(g.mul(col, g.scalar("Emissive", 0.0)), "", P.MP_EMISSIVE_COLOR)
+            # only the parts brighter than EmissiveFloor glow (a lamp's diffuser, not its housing): mask =
+            # saturate((green - floor) / (1 - floor)); floor 0 = the whole colour, as before
+            fl = g.scalar("EmissiveFloor", 0.0)
+            m = g.one(unreal.MaterialExpressionSaturate, g.op(unreal.MaterialExpressionDivide,
+                      g.sub(g.mask(col, "", g=True), fl), g.sub(g.const(1.0001), fl)))
+            # EmissiveWhite 1: the whole piece glows white (lamp panels whose diffuser texture came out grey)
+            e_col = g.lerp(g.mul(col, m), g.vector("EmissiveColor", (1, 1, 1, 1)), g.scalar("EmissiveWhite", 0.0),
+                           "", "RGB", "")
+            g.out(g.mul(e_col, g.scalar("Emissive", 0.0)), "", P.MP_EMISSIVE_COLOR)
 
         def foliage(g):
             bc = g.tex("BaseColor", C, self.t_bc)
@@ -509,7 +517,9 @@ class Importer:
                         texs[param] = texture(os.path.join(e["dir"], f), folder, kind)
                 prm = slot.get("params", {})
                 parent = self.m_foliage if slot.get("shader") == "foliage" else self.m_prop
-                scal = {} if parent == self.m_foliage else {"Emissive": prm.get("emissive", 0.0)}
+                scal = {} if parent == self.m_foliage else {"Emissive": prm.get("emissive", 0.0),
+                                                            "EmissiveFloor": prm.get("emissive_floor", 0.0),
+                                                            "EmissiveWhite": prm.get("emissive_white", 0.0)}
                 if "roughness" in prm and parent == self.m_prop:
                     scal["RoughnessScale"] = prm["roughness"] / 0.6
                 mi = self.instance(name, folder, parent, texs, scal, {"Tint": prm["tint"]} if "tint" in prm else {})
@@ -560,7 +570,7 @@ class Importer:
         lv = self.lv
         les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
         eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-        path = f"{self.wroot}/Maps/{self.wname}"
+        path = f"{self.wroot}/Maps/{safe(lv.get('map', lv['name']))}"
         if EAL.does_asset_exist(path):
             les.load_level(path)
         else:

@@ -4,7 +4,9 @@ scene.json (all positions in world metres; see docs/FORMATS.md for the full refe
   instances   [{"name", "item", "pos": [x, y] | [x, y, z], "yaw", "scale" (s or [sx, sy, sz]; sx < 0 mirrors), "space"}]
               pos with 2 numbers sits on the terrain (or z = 0 without terrain)
               {"item", "on": "<name of another instance>", "at": [x, y] (parent-local), "level": i, "z": dz}
-                 stacks on the parent's top (or its item's "surfaces"[i], e.g. a shelf board); yaw is relative
+                 stands on the parent's real top under "at" (game/support.json from w2w.py supports); with
+                 "level" i on the i-th shelf board (the declared "surfaces" are mapped by rank onto the boards the
+                 model really has); without a support map: "surfaces"[i] or the bounding box top. yaw is relative
   arrays      [{"items": {"book_red": 2, "book_blue": 1} | "item", "from", "to", "count", "on", "level",
                "jitter": {"pos": 0.01, "yaw": 4}, "yaw", "space"}]          (rows of books, jars, logs, planks)
   scatter     [{"items": {...}, "rect": [x0, y0, x1, y1], "count", "min_dist", "on", "level", "yaw": "random",
@@ -149,7 +151,7 @@ def shared_textures(world):
 
 
 # ---------------------------------------------------------------- compile
-def compile_level(world):
+def compile_level(world, focus=None):
     sc = load(world.p("build", "scene.json"), {})
     arch = load(world.p("build", "architecture.json"), {"buildings": []})
     items = world.items(refresh=True)
@@ -170,13 +172,57 @@ def compile_level(world):
         dpt = 0.03 if it.kind == "slab" else (s.get("depth") or w)
         return [w, dpt, h]
 
-    def top_of(inst, level):
+    supports = {}
+
+    def support(iid):
+        """game/support.json of a baked prop (blender/support_map.py), or None."""
+        if iid not in supports:
+            it = items.get(iid)
+            sp = load(it.f("game", "support.json"), {}) if it is not None and it.stage() == "baked" else {}
+            supports[iid] = sp if sp.get("cells") else None
+        return supports[iid]
+
+    def top_of(inst, level, at=(0.0, 0.0), child=None):
+        """Height above the parent's pivot where a child at parent-local 'at' stands: the real table top or shelf
+        board under it (support map), else the item's declared 'surfaces'[level], else the bounding box top."""
         it = items.get(inst["item"])
         surf = (it.get("surfaces") if it else None) or []
-        if level is not None and level < len(surf):
-            return surf[level]
         sc_ = inst.get("scale", 1.0)                        # [x, y, z] mirrors (a negative x) or stretches
-        return item_size(inst["item"])[2] * (abs(sc_[2]) if isinstance(sc_, (list, tuple)) else sc_)
+        sx, sy, sz = (abs(sc_[0]), abs(sc_[1]), abs(sc_[2])) if isinstance(sc_, (list, tuple)) else (sc_, sc_, sc_)
+        sp = support(inst["item"])
+        if sp:
+            nx, ny = sp["grid"]
+            i = int((at[0] / sx - sp["x0"]) / sp["dx"])
+            j = int((at[1] / sy - sp["y0"]) / sp["dy"])
+            hits = []
+            for r in range(6):                              # nearest cells with a hit (slatted tops: up to 5 rings)
+                for jj in range(j - r, j + r + 1):
+                    for ii in range(i - r, i + r + 1):
+                        if 0 <= ii < nx and 0 <= jj < ny:
+                            hits += sp["cells"][jj * nx + ii]
+                if hits:
+                    break
+            boards = sp.get("boards") or sp.get("levels") or []
+            if hits:
+                if level is not None and boards:
+                    n, m = max(len(surf), level + 1), len(boards)
+                    target = boards[min(m - 1, round(level * (m - 1) / max(n - 1, 1)))] if n > 1 else boards[-1]
+                    z = min(hits, key=lambda h: abs(h - target))
+                    z = z if abs(z - target) < 0.08 else target
+                else:
+                    z = max(hits)
+                return z * sz
+            bw, bd = sp["bounds"][:2]
+            if child is not None and (abs(at[0] / sx) > bw / 2 + 0.03 or abs(at[1] / sy) > bd / 2 + 0.03):
+                warnings.append(f"{child}: 'at' {list(at)} is outside {inst['name']} ({inst['item']}, "
+                                f"{bw:.2f} x {bd:.2f} m): it hangs in the air beside it")
+            if boards and level is None:
+                return boards[-1] * sz
+            if child is not None:
+                warnings.append(f"{child}: 'at' {list(at)} is off the support of {inst['name']} ({inst['item']})")
+        if level is not None and level < len(surf):
+            return surf[level] * sz
+        return item_size(inst["item"])[2] * sz
 
     # expand arrays and scatter into plain instances
     raw = list(sc.get("instances", []))
@@ -232,8 +278,8 @@ def compile_level(world):
             pr = resolve(parent, depth + 1)
             lx, ly = inst.get("at", [0, 0])[:2]
             dx, dy = rot2((lx, ly), pr["yaw"])
-            pos = [pr["pos"][0] + dx, pr["pos"][1] + dy, pr["pos"][2] + top_of(parent, inst.get("level")) +
-                   inst.get("z", 0.0)]
+            pos = [pr["pos"][0] + dx, pr["pos"][1] + dy,
+                   pr["pos"][2] + top_of(parent, inst.get("level"), (lx, ly), inst["name"]) + inst.get("z", 0.0)]
             yaw = pr["yaw"] + inst.get("yaw", 0)
             space = inst.get("space", pr["space"])
         else:
@@ -378,6 +424,20 @@ def compile_level(world):
                        "slots": m["slots"], "space": m.get("space", m["building"])} for m in arch_out],
              "terrain": terr, "foliage": fol_out, "instances": instances, "decals": decals, "lights": lights,
              "lighting": sc.get("lighting", {}), "cameras": cameras, "player_start": ps}
+    if focus:                       # one room at a time: its instances, lights, decals and cameras only
+        F = set(focus) | {f + "_b" for f in focus}
+        keep = [r for r in instances if r["space"] in F]
+        if keep:
+            lo = [min(r["pos"][i] for r in keep) - 1.0 for i in range(3)]
+            hi = [max(r["pos"][i] for r in keep) + 1.0 for i in range(2)] + [max(r["pos"][2] for r in keep) + 4.0]
+            level["decals"] = [d for d in decals if all(lo[i] <= d["pos"][i] <= hi[i] for i in range(3))]
+        need = {r["item"] for r in keep}
+        level["library"] = {k: v for k, v in library.items() if v["kind"] in ("surface", "decal") or k in need}
+        level.update({"map": f"{level['name']}_focus", "instances": keep, "foliage": [],
+                      "lights": [l for l in lights if l["space"] in F],
+                      "cameras": [c for c in cameras if c.get("space") in F]})
+        print(f"focus {sorted(focus)}: {len(keep)} instances, {len(level['lights'])} lights, "
+              f"{len(level['decals'])} decals, {len(level['cameras'])} cameras (map {level['map']})")
     save(world.out("level.json"), level)
 
     # budget

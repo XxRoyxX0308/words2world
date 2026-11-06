@@ -18,6 +18,9 @@ item.json "trellis" (all optional; defaults depend on tier):
   seed           default 42; change it to get a different reconstruction of the same image
   steps          sampler steps for all three stages (default: the LADDER rung)
   pipeline_type and steps set here override every rung for that item.
+
+plan/world.json "trellis" (optional): a world-wide default between the rung and the item, e.g.
+{"pipeline_type": "512", "steps": 18} runs the whole world at 512 / 18 steps (an item's own "trellis" still wins).
 """
 import os
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
@@ -54,6 +57,7 @@ def level(it):
 
 
 world = World(sys.argv[1])
+WORLD_TRELLIS = load(world.p("plan", "world.json"), {}).get("trellis", {})
 queue = load(world.p("logs", "trellis_queue.json"), {}).get("ids")
 items = world.items()
 todo = []
@@ -120,7 +124,7 @@ def cuda_ok():
 
 def run(it, rung, tag):
     t0 = time.time()
-    cfg = {**DEFAULTS[it.tier], **LADDER[rung], **it.get("trellis", {})}
+    cfg = {**DEFAULTS[it.tier], **LADDER[rung], **WORLD_TRELLIS, **it.get("trellis", {})}
     print(f"[start] {it.id} {tag} {cfg['pipeline_type']}/{cfg['steps']} {time.strftime('%H:%M:%S')}", flush=True)
     mesh = None
     try:

@@ -20,7 +20,7 @@ Status per item in the report: ok (trust it) | review (hero tier: always look) |
 
 Item fields used: size {"height" | "width" | "depth"} (metres; several = per-axis), tier hero|prop|small,
 preset clutter|hard_surface|organic|hero, bake {...overrides}, condition new|used|worn|ruined (or wear / dirt /
-rough_var / bare_metal), yaw_fix, collision box|convex|none, emissive, aspect + frame (slabs), surfaces [heights of
+rough_var / bare_metal), yaw_fix, flip_fix, pitch_fix, collision box|convex|none, emissive, aspect + frame (slabs), surfaces [heights of
 shelf levels, for stacking in scene.json].
 """
 import math
@@ -163,9 +163,16 @@ def bbox(obj):
     return lo, hi
 
 
+def fix_rot(spec):
+    """yaw_fix (deg about Z) after flip_fix (true: turn the model upside down, about X): a ceiling light drawn
+    face-up on the table hangs face-down in the scene."""
+    rot = Matrix.Rotation(math.radians(spec.get("yaw_fix", 0)), 4, "Z") @         Matrix.Rotation(math.radians(spec.get("pitch_fix", 0)), 4, "X")     # pitch_fix 90: a -Y face turns down
+    return rot @ Matrix.Rotation(math.pi, 4, "X") if spec.get("flip_fix") else rot
+
+
 def normalise_matrix(obj, spec):
-    """Matrix that applies yaw_fix, scales to the real size and puts the pivot at the bottom centre."""
-    rot = Matrix.Rotation(math.radians(spec.get("yaw_fix", 0)), 4, "Z")
+    """Matrix that applies yaw_fix / flip_fix, scales to the real size and puts the pivot at the bottom centre."""
+    rot = fix_rot(spec)
     pts = [rot @ v.co for v in obj.data.vertices]
     lo = Vector([min(p[i] for p in pts) for i in range(3)])
     hi = Vector([max(p[i] for p in pts) for i in range(3)])
@@ -805,7 +812,7 @@ def process(world, it, retexture=False, overrides=None):
     else:
         obj = import_joined(it.f("3d", "model.glb"), base)
         # a model lying sideways is squashed to the planned size without any visible error: flag it
-        rot = Matrix.Rotation(math.radians(spec.get("yaw_fix", 0)), 4, "Z")
+        rot = fix_rot(spec)
         lo, hi = (Vector([f(p[i] for p in [rot @ v.co for v in obj.data.vertices]) for i in range(3)])
                   for f in (min, max))
         rx, ry = hi.x - lo.x, hi.y - lo.y
@@ -919,7 +926,9 @@ def process(world, it, retexture=False, overrides=None):
     flat = np.dstack([np.full((4, 4), .5)] * 2 + [np.ones((4, 4))])
     img_write(os.path.join(out, files["n"]), normal if normal is not None else flat)
     slots.insert(0, {"name": f"M_{pid}", "textures": files, "shader": shader,
-                     "params": {"emissive": float(spec.get("emissive", 0))}})
+                     "params": {"emissive": float(spec.get("emissive", 0)),
+                                "emissive_floor": float(spec.get("emissive_floor", 0)),
+                                "emissive_white": float(spec.get("emissive_white", 0))}})
 
     ratios = [1.0] if slab or card else LOD_RATIOS[tier]
     lods = make_lods(obj, base, ratios, p)

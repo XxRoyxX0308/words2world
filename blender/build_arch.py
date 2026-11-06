@@ -252,8 +252,10 @@ def opening_trim(g, part, a, d, out, op, z, t, surf_default):
     if li:
         lh = li.get("height", 0.18)
         ext = li.get("extend", 0.15)
-        g.box(c + UP * (z + sill + h + fw + lh / 2), (w + 2 * fw + 2 * ext, t + 2 * li.get("depth", fd + 0.02), lh),
-              li.get("surface", fs), d)
+        d_out = li.get("depth", fd + 0.02)          # a sun shade sticks out of the facade, not into the room
+        d_in = min(d_out, fd + 0.02)
+        g.box(c + out * ((d_out - d_in) / 2) + UP * (z + sill + h + fw + lh / 2),
+              (w + 2 * fw + 2 * ext, t + d_out + d_in, lh), li.get("surface", fs), d)
     if op.get("glass", op.get("kind") == "window"):
         g.box(c + UP * (z + sill + h / 2), (w, 0.012, h), "glass", d)
         cols, rows = op.get("mullions", [2, 2])
